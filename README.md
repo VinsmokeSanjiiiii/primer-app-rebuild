@@ -229,4 +229,4 @@ Mapping to the requested native layout:
 
 ## License
 
-MIT (placeholder). Replace with your organization's preferred license.
+MIT
