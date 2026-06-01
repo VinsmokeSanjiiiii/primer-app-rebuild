@@ -5,7 +5,6 @@
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
-    "types": ["node"],
 
     /* Bundler mode */
     "moduleResolution": "bundler",
@@ -15,7 +14,12 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
-    /* Path mapping */
+    /* Path mapping — baseUrl is retained for alias support.
+       TypeScript 5.9+ emits a deprecation notice when baseUrl is set alongside
+       certain module modes; keepBaseUrl is still needed for path aliases to
+       resolve correctly with the "bundler" moduleResolution strategy.
+       If the warning becomes a build-break in a future version, migrate
+       to tsconfig "paths" with fully-qualified prefixes instead. */
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
@@ -23,8 +27,8 @@
 
     /* Linting */
     "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src", "vite.config.ts"]

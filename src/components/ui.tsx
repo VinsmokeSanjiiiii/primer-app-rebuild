@@ -3,6 +3,7 @@ import {
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   useEffect,
+  type TextareaHTMLAttributes,
 } from "react";
 import { cn } from "../utils/cn";
 import { Icon, type IconName } from "./Icon";
@@ -122,9 +123,7 @@ export function TextArea({
   label,
   className,
   ...props
-}: { label?: string } & InputHTMLAttributes<HTMLTextAreaElement> & {
-    rows?: number;
-  }) {
+}: { label?: string } & TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <label className="block">
       {label && (
@@ -138,7 +137,7 @@ export function TextArea({
           "dark:border-white/15 dark:bg-slate-900/50 dark:text-white dark:placeholder:text-slate-500",
           className,
         )}
-        {...(props as React.TextareaHTMLAttributes<HTMLTextAreaElement>)}
+        {...props}
       />
     </label>
   );

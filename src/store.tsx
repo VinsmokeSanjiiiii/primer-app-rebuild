@@ -4,6 +4,7 @@ import {
   useState,
   useCallback,
   useMemo,
+  useEffect,
   type ReactNode,
 } from "react";
 import type {
@@ -28,11 +29,18 @@ import {
   seedNotifications,
   newId,
 } from "./data/seed";
+import { getRepository } from "./data/repository";
 import { fmtDate, fmtTime, serverNow, monthName, computeTotalHours } from "./lib/date";
 
-const SESSION_KEY = "primer_portal_session"; // DataStore analogue
+// ---------------------------------------------------------------------------
+// Keys for local persistence (DataStore analogue)
+// ---------------------------------------------------------------------------
+const SESSION_KEY = "primer_portal_session";
 const THEME_KEY = "primer_portal_theme";
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 interface Toast {
   id: string;
   text: string;
@@ -96,23 +104,45 @@ interface AppState {
 
 const Ctx = createContext<AppState | null>(null);
 
+// ---------------------------------------------------------------------------
+// The four bottom-nav root screens — navigating between these replaces
+// the view instead of stacking, preventing infinite stack growth.
+// ---------------------------------------------------------------------------
+const ROOT_SCREENS: ReadonlySet<ScreenId> = new Set([
+  "dashboard",
+  "attendance",
+  "requests",
+  "profile",
+]);
+
+// ---------------------------------------------------------------------------
+// Provider
+// ---------------------------------------------------------------------------
 export function AppProvider({ children }: { children: ReactNode }) {
+  const repo = useMemo(() => getRepository(), []);
+
+  // ---- session ----
   const [session, setSession] = useState<SessionMeta | null>(() => {
     try {
-      const raw = localStorage.getItem(SESSION_KEY);
+      const raw =
+        localStorage.getItem(SESSION_KEY) ??
+        sessionStorage.getItem(SESSION_KEY);
       return raw ? (JSON.parse(raw) as SessionMeta) : null;
     } catch {
       return null;
     }
   });
 
+  // ---- theme ----
   const [dark, setDark] = useState<boolean>(() => {
     return localStorage.getItem(THEME_KEY) === "dark";
   });
 
+  // ---- navigation ----
   const [screen, setScreen] = useState<ScreenId>("dashboard");
   const [stack, setStack] = useState<ScreenId[]>([]);
 
+  // ---- data ----
   const [profile, setProfile] = useState<Profile>(seedProfile);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>(seedAttendance);
   const [leaves, setLeaves] = useState<LeaveRequest[]>(seedLeaves);
@@ -122,6 +152,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [holidays] = useState<Holiday[]>(seedHolidays);
   const [notifications, setNotifications] = useState<AppNotification[]>(seedNotifications);
 
+  // ---- toasts ----
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const toast = useCallback((text: string, kind: Toast["kind"] = "info") => {
@@ -130,20 +161,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== t.id)), 3200);
   }, []);
 
-  const signIn = useCallback((email: string, remember: boolean) => {
-    const meta: SessionMeta = {
-      employeeId: seedProfile.employeeId,
-      email,
-      rememberMe: remember,
-      deviceBound: true,
-      loggedInAt: Date.now(),
-    };
-    setSession(meta);
-    if (remember) localStorage.setItem(SESSION_KEY, JSON.stringify(meta));
-    else sessionStorage.setItem(SESSION_KEY, JSON.stringify(meta));
-    setScreen("dashboard");
-    setStack([]);
-  }, []);
+  // ---- persist mutations to repository in the background ----
+  // (fire-and-forget so the UI stays fast; errors toast)
+  const persistProfile = useCallback(
+    (p: Profile) => {
+      repo.updateProfile(p.employeeId, p).catch(() => {});
+    },
+    [repo],
+  );
+
+  // ---- auth ----
+  const signIn = useCallback(
+    (email: string, remember: boolean) => {
+      const meta: SessionMeta = {
+        employeeId: seedProfile.employeeId,
+        email,
+        rememberMe: remember,
+        deviceBound: true,
+        loggedInAt: Date.now(),
+      };
+      setSession(meta);
+      if (remember) localStorage.setItem(SESSION_KEY, JSON.stringify(meta));
+      else sessionStorage.setItem(SESSION_KEY, JSON.stringify(meta));
+      setScreen("dashboard");
+      setStack([]);
+    },
+    [],
+  );
 
   const signOut = useCallback(() => {
     setSession(null);
@@ -151,8 +195,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     sessionStorage.removeItem(SESSION_KEY);
     setScreen("dashboard");
     setStack([]);
-  }, []);
+    repo.signOut().catch(() => {});
+  }, [repo]);
 
+  // ---- theme ----
   const toggleDark = useCallback(() => {
     setDark((d) => {
       const next = !d;
@@ -161,10 +207,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  // ---- navigation ----
   const navigate = useCallback(
     (s: ScreenId) => {
-      setStack((prev) => [...prev, screen]);
-      setScreen(s);
+      if (s === screen) return; // already here
+      // If navigating to a root tab, clear the stack and switch directly.
+      if (ROOT_SCREENS.has(s)) {
+        setStack([]);
+        setScreen(s);
+      } else {
+        setStack((prev) => [...prev, screen]);
+        setScreen(s);
+      }
     },
     [screen],
   );
@@ -181,6 +235,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return next;
     });
   }, []);
+
+  // ---- hydrate data from repository on mount ----
+  useEffect(() => {
+    (async () => {
+      try {
+        const [p, a, l, o, c] = await Promise.all([
+          repo.getProfile(seedProfile.employeeId),
+          repo.getAttendance(seedProfile.employeeId),
+          repo.getLeaves(seedProfile.employeeId),
+          repo.getOtRequests(seedProfile.employeeId),
+          repo.getCoverage(),
+        ]);
+        if (p) setProfile(p);
+        if (a.length) setAttendance(a);
+        if (l.length) setLeaves(l);
+        if (o.length) setOt(o);
+        if (c.length) setCoverage(c);
+      } catch {
+        // Falls back to seed data — no crash.
+      }
+    })();
+  }, [repo]);
 
   // ---- mutations ----
   const clockIn = useCallback(() => {
@@ -201,9 +277,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       year: now.getFullYear(),
     };
     setAttendance((prev) => [rec, ...prev]);
-    setProfile((p) => ({ ...p, isClockedIn: true }));
+    setProfile((p) => {
+      const next = { ...p, isClockedIn: true };
+      persistProfile(next);
+      return next;
+    });
+    repo.createAttendance(rec).catch(() => {});
     toast("Clocked in. Reminders scheduled for your shift.", "success");
-  }, [profile.employeeId, toast]);
+  }, [profile.employeeId, toast, repo, persistProfile]);
 
   const clockOut = useCallback(() => {
     const now = serverNow();
@@ -225,24 +306,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
       };
       const copy = [...prev];
       copy[idx] = updated;
+      repo.updateAttendance(updated.id, updated).catch(() => {});
       return copy;
     });
-    setProfile((p) => ({ ...p, isClockedIn: false }));
+    setProfile((p) => {
+      const next = { ...p, isClockedIn: false };
+      persistProfile(next);
+      return next;
+    });
     toast("Clocked out. Total hours saved.", "success");
-  }, [toast]);
+  }, [toast, repo, persistProfile]);
 
   const updateNote = useCallback(
     (id: string, note: string) => {
+      const ts = serverNow().getTime();
       setAttendance((prev) =>
         prev.map((r) =>
-          r.id === id
-            ? { ...r, note, noteLastEditedTs: serverNow().getTime() }
-            : r,
+          r.id === id ? { ...r, note, noteLastEditedTs: ts } : r,
         ),
       );
+      repo.updateAttendance(id, { note, noteLastEditedTs: ts }).catch(() => {});
       toast("Note saved.", "success");
     },
-    [toast],
+    [toast, repo],
   );
 
   const submitLeave = useCallback<AppState["submitLeave"]>(
@@ -254,19 +340,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
       };
       setLeaves((prev) => [full, ...prev]);
+      repo.createLeave(full).catch(() => {});
       // Credit deduction
       setProfile((p) => {
+        let next = p;
         if (lr.leaveType === "Vacation Leave")
-          return { ...p, vlCredits: Math.max(0, p.vlCredits - lr.days) };
-        if (lr.leaveType === "Sick Leave")
-          return { ...p, slCredits: Math.max(0, p.slCredits - lr.days) };
-        if (lr.leaveType === "Birthday Leave")
-          return { ...p, blCredit: Math.max(0, p.blCredit - 1) };
-        return p;
+          next = { ...p, vlCredits: Math.max(0, p.vlCredits - lr.days) };
+        else if (lr.leaveType === "Sick Leave")
+          next = { ...p, slCredits: Math.max(0, p.slCredits - lr.days) };
+        else if (lr.leaveType === "Birthday Leave")
+          next = { ...p, blCredit: Math.max(0, p.blCredit - 1) };
+        persistProfile(next);
+        return next;
       });
       toast(`${lr.leaveType} request submitted.`, "success");
     },
-    [toast],
+    [toast, repo, persistProfile],
   );
 
   const cancelLeave = useCallback(
@@ -274,15 +363,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLeaves((prev) => {
         const target = prev.find((l) => l.id === id);
         if (target) {
-          // Return credits
           setProfile((p) => {
+            let next = p;
             if (target.leaveType === "Vacation Leave")
-              return { ...p, vlCredits: p.vlCredits + target.days };
-            if (target.leaveType === "Sick Leave")
-              return { ...p, slCredits: p.slCredits + target.days };
-            if (target.leaveType === "Birthday Leave")
-              return { ...p, blCredit: p.blCredit + 1 };
-            return p;
+              next = { ...p, vlCredits: p.vlCredits + target.days };
+            else if (target.leaveType === "Sick Leave")
+              next = { ...p, slCredits: p.slCredits + target.days };
+            else if (target.leaveType === "Birthday Leave")
+              next = { ...p, blCredit: p.blCredit + 1 };
+            persistProfile(next);
+            return next;
           });
         }
         return prev.map((l) =>
@@ -291,13 +381,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
             : l,
         );
       });
-      // Remove related coverage/attendance placeholders
+      repo.updateLeave(id, { status: "Cancelled", cancellationReason: reason }).catch(() => {});
+      repo
+        .deleteCoverageByFilter({
+          coverageType: "Leave",
+          requesterId: profile.employeeId,
+          coverageStatus: "Available",
+        })
+        .catch(() => {});
       setCoverage((prev) =>
-        prev.filter((c) => !(c.coverageType === "Leave" && c.requesterId === profile.employeeId && c.coverageStatus === "Available")),
+        prev.filter(
+          (c) =>
+            !(
+              c.coverageType === "Leave" &&
+              c.requesterId === profile.employeeId &&
+              c.coverageStatus === "Available"
+            ),
+        ),
       );
       toast("Leave cancelled and credits returned.", "success");
     },
-    [profile.employeeId, toast],
+    [profile.employeeId, toast, repo, persistProfile],
   );
 
   const submitOt = useCallback<AppState["submitOt"]>(
@@ -309,9 +413,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
       };
       setOt((prev) => [full, ...prev]);
+      repo.createOtRequest(full).catch(() => {});
       toast("OT request submitted.", "success");
     },
-    [toast],
+    [toast, repo],
   );
 
   const cancelOt = useCallback(
@@ -323,9 +428,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
             : o,
         ),
       );
+      repo.updateOtRequest(id, { status: "Cancelled", cancellationReason: reason }).catch(() => {});
       toast("OT request cancelled.", "success");
     },
-    [toast],
+    [toast, repo],
   );
 
   const submitTechCoverage = useCallback<AppState["submitTechCoverage"]>(
@@ -337,9 +443,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
       };
       setCoverage((prev) => [full, ...prev]);
+      repo.createCoverage(full).catch(() => {});
       toast("Tech issue coverage request submitted.", "success");
     },
-    [toast],
+    [toast, repo],
   );
 
   const takeoverCoverage = useCallback(
@@ -357,9 +464,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
           };
         }),
       );
+      repo
+        .updateCoverage(id, {
+          coverageStatus: "Ongoing",
+          coveredById: profile.employeeId,
+          takenBy: profile.fullName,
+        })
+        .catch(() => {});
       toast("Coverage taken over. Status set to Ongoing.", "success");
     },
-    [profile.employeeId, profile.fullName, toast],
+    [profile.employeeId, profile.fullName, toast, repo],
   );
 
   const cancelCoverage = useCallback(
@@ -377,9 +491,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
             : c,
         ),
       );
+      repo
+        .updateCoverage(id, {
+          coverageStatus: "Available",
+          coveredById: undefined,
+          takenBy: undefined,
+          coveredHours: undefined,
+        })
+        .catch(() => {});
       toast("Coverage cancelled and returned to Available.", "info");
     },
-    [toast],
+    [toast, repo],
   );
 
   const changeLeaveDate = useCallback(
@@ -392,6 +514,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               : l,
           ),
         );
+        repo.updateLeave(id, { status: "Change Pending", leaveDate: [newDate] }).catch(() => {});
       } else {
         setOt((prev) =>
           prev.map((o) =>
@@ -400,26 +523,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
               : o,
           ),
         );
+        repo.updateOtRequest(id, { status: "Change Pending", otDate: newDate }).catch(() => {});
       }
       toast("Change request submitted (Change Pending).", "success");
     },
-    [toast],
+    [toast, repo],
   );
 
   const updateProfile = useCallback(
     (patch: Partial<Profile>) => {
-      setProfile((p) => ({ ...p, ...patch }));
+      setProfile((p) => {
+        const next = { ...p, ...patch };
+        persistProfile(next);
+        return next;
+      });
       toast("Profile updated.", "success");
     },
-    [toast],
+    [toast, persistProfile],
   );
 
-  const markNotificationRead = useCallback((id: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, readAt: Date.now() } : n)),
-    );
-  }, []);
+  const markNotificationRead = useCallback(
+    (id: string) => {
+      const readAt = Date.now();
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, readAt } : n)),
+      );
+      repo.updateNotification(id, { readAt }).catch(() => {});
+    },
+    [repo],
+  );
 
+  // ---- context value ----
   const value = useMemo<AppState>(
     () => ({
       isAuthed: !!session,

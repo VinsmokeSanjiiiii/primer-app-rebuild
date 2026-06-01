@@ -1,21 +1,31 @@
 import { useEffect, useState } from "react";
 import { Icon } from "../components/Icon";
 
+const SESSION_KEY = "primer_portal_session";
+
 export function Splash({ onDone }: { onDone: () => void }) {
   const [progress, setProgress] = useState(0);
   const [online] = useState(() => navigator.onLine);
   const [status, setStatus] = useState("Checking connection…");
 
   useEffect(() => {
+    const hasSession = !!(
+      localStorage.getItem(SESSION_KEY) ??
+      sessionStorage.getItem(SESSION_KEY)
+    );
+
     if (!online) {
       setStatus("No internet connection. Retrying…");
     }
+
     const steps = [
-      { p: 25, s: "Verifying device binding…" },
-      { p: 55, s: "Loading secure session…" },
-      { p: 80, s: "Preparing your workspace…" },
+      { p: 20, s: online ? "Connection verified." : "Retrying connection…" },
+      { p: 45, s: "Verifying device binding…" },
+      { p: 65, s: hasSession ? "Restoring secure session…" : "Loading secure session…" },
+      { p: 85, s: "Preparing your workspace…" },
       { p: 100, s: "Ready" },
     ];
+
     let i = 0;
     const t = setInterval(() => {
       if (i < steps.length) {
@@ -24,9 +34,9 @@ export function Splash({ onDone }: { onDone: () => void }) {
         i++;
       } else {
         clearInterval(t);
-        setTimeout(onDone, 350);
+        setTimeout(onDone, 300);
       }
-    }, 480);
+    }, 420);
     return () => clearInterval(t);
   }, [online, onDone]);
 
