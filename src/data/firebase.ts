@@ -16,12 +16,11 @@ import { getStorage, type FirebaseStorage } from "firebase/storage";
 /**
  * Default Firebase project configuration.
  *
- * Matches the original `primer3` Android client extracted from
- * `google-services.json`:
+ * Matches the original `primerdb2` Android client provided in the brief:
  *
- *   project_id: primerdb-ef158
- *   databaseURL: https://primerdb-ef158-default-rtdb.firebaseio.com
- *   storageBucket: primerdb-ef158.firebasestorage.app
+ *   project_id: primerdb2
+ *   databaseURL: https://primerdb2-default-rtdb.firebaseio.com
+ *   storageBucket: primerdb2.firebasestorage.app
  *
  * Each value can be overridden at build time by setting the matching
  * `VITE_FB_*` environment variable (see `.env.example`).  This is
@@ -29,13 +28,13 @@ import { getStorage, type FirebaseStorage } from "firebase/storage";
  * database without editing source code.
  */
 const DEFAULT_FIREBASE_CONFIG = {
-  apiKey: "AIzaSyAT6fomrd7Cj1Uhh8mTrW9HxNUGOgkfMTc",
-  authDomain: "primerdb-ef158.firebaseapp.com",
-  databaseURL: "https://primerdb-ef158-default-rtdb.firebaseio.com",
-  projectId: "primerdb-ef158",
-  storageBucket: "primerdb-ef158.firebasestorage.app",
-  messagingSenderId: "581806963667",
-  appId: "1:581806963667:android:15581c152ebe8553b8cd26",
+  apiKey: "AIzaSyCBgMvM6xAnoHN_l6PSIclIBkml_vVercY",
+  authDomain: "primerdb2.firebaseapp.com",
+  databaseURL: "https://primerdb2-default-rtdb.firebaseio.com",
+  projectId: "primerdb2",
+  storageBucket: "primerdb2.firebasestorage.app",
+  messagingSenderId: "1055563458097",
+  appId: "1:1055563458097:android:47c55567f67d29f2415710",
 } as const;
 
 export const FIREBASE_CONFIG = {

@@ -121,7 +121,6 @@ export function Dashboard() {
         <div className="grid grid-cols-2 gap-y-3">
           <Field label="Role" value={profile.role} />
           <Field label="Team" value={profile.team} />
-          <Field label="Email" value={profile.primerEmail} />
           <Field label="Days off" value={profile.daysOff} />
           <Field label="Date started" value={profile.dateStarted} />
           <Field label="Tenure" value={tenureFrom(profile.dateStarted)} />
