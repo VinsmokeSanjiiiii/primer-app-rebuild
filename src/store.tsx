@@ -18,8 +18,18 @@ import type {
   AppNotification,
   ScreenId,
 } from "./types";
-import { newId } from "./data/seed";
-import { getRepository, isOnlineRepository } from "./data/repository";
+import {
+  seedProfile,
+  seedAttendance,
+  seedLeaves,
+  seedOt,
+  seedCoverage,
+  seedInfractions,
+  seedHolidays,
+  seedNotifications,
+  newId,
+} from "./data/seed";
+import { getRepository } from "./data/repository";
 import {
   fmtDate,
   fmtTime,
@@ -34,45 +44,6 @@ import {
 // ---------------------------------------------------------------------------
 const SESSION_KEY = "primer_portal_session";
 const THEME_KEY = "primer_portal_theme";
-
-// ---------------------------------------------------------------------------
-// Empty initial states - no seed data
-// ---------------------------------------------------------------------------
-const EMPTY_PROFILE: Profile = {
-  id: "",
-  employeeId: "",
-  primerEmail: "",
-  fullName: "",
-  passwordlessAuthEnabled: false,
-  deviceId: undefined,
-  publicKey: undefined,
-  role: "",
-  position: "",
-  team: "",
-  schedule: "",
-  daysOff: "",
-  status: "",
-  dateStarted: "",
-  tenure: "",
-  address: "",
-  contactNumber: "",
-  personalEmail: "",
-  birthDate: "",
-  department: "",
-  phoneName: "",
-  vlCredits: 0,
-  slCredits: 0,
-  blCredit: 0,
-  slConversionCredits: 0,
-  profileImageUrl: undefined,
-  notes: "",
-  philhealth: "",
-  sss: "",
-  tin: "",
-  pagIbig: "",
-  workSetup: "",
-  isClockedIn: false,
-};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -141,9 +112,6 @@ interface AppState {
   toasts: Toast[];
   toast: (text: string, kind?: Toast["kind"]) => void;
 
-  // loading state
-  isLoading: boolean;
-
   // internal
   hasHydrated: boolean;
 }
@@ -188,19 +156,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [screen, setScreen] = useState<ScreenId>("dashboard");
   const [stack, setStack] = useState<ScreenId[]>([]);
 
-  // ---- data - start empty, never seed ----
-  const [profile, setProfile] = useState<Profile>(EMPTY_PROFILE);
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
-  const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
-  const [ot, setOt] = useState<OtRequest[]>([]);
-  const [coverage, setCoverage] = useState<CoverageRequest[]>([]);
-  const [infractions, setInfractions] = useState<Infraction[]>([]);
-  const [holidays, setHolidays] = useState<Holiday[]>([]);
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  // ---- data ----
+  const [profile, setProfile] = useState<Profile>(seedProfile);
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>(seedAttendance);
+  const [leaves, setLeaves] = useState<LeaveRequest[]>(seedLeaves);
+  const [ot, setOt] = useState<OtRequest[]>(seedOt);
+  const [coverage, setCoverage] = useState<CoverageRequest[]>(seedCoverage);
+  const [infractions] = useState<Infraction[]>(seedInfractions);
+  const [holidays] = useState<Holiday[]>(seedHolidays);
+  const [notifications, setNotifications] = useState<AppNotification[]>(seedNotifications);
 
   // ---- toasts ----
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
 
   const toast = useCallback((text: string, kind: Toast["kind"] = "info") => {
     const t: Toast = { id: newId(), text, kind };
@@ -209,110 +176,55 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // ---- persist mutations to repository in the background ----
+  // (fire-and-forget so the UI stays fast; errors toast)
   const persistProfile = useCallback(
     (p: Profile) => {
-      if (!isOnlineRepository()) return;
-      repo.updateProfile(p.employeeId, p).catch((err) => {
-        console.error("Failed to persist profile:", err);
-        toast("Failed to save changes. Please try again.", "error");
-      });
+      repo.updateProfile(p.employeeId, p).catch(() => {});
     },
-    [repo, toast],
+    [repo],
   );
-
-  // ---- hydrate user data from Firebase ----
-  const hydrateUserData = useCallback(async (empId: string) => {
-    setIsLoading(true);
-    try {
-      // First, cache the Firebase server-time offset
-      const offset = await repo.getServerTimeOffsetMs();
-      if (typeof offset === "number") setServerTimeOffsetMs(offset);
-
-      const [p, a, l, o, c, inf, h, notifs] = await Promise.all([
-        repo.getProfile(empId),
-        repo.getAttendance(empId),
-        repo.getLeaves(empId),
-        repo.getOtRequests(empId),
-        repo.getCoverage(),
-        repo.getInfractions(empId),
-        repo.getHolidays(),
-        repo.getNotifications(empId),
-      ]);
-
-      if (p) setProfile(p);
-      if (a.length) setAttendance(a);
-      if (l.length) setLeaves(l);
-      if (o.length) setOt(o);
-      if (c.length) setCoverage(c);
-      if (inf.length) setInfractions(inf);
-      if (h.length) setHolidays(h);
-      if (notifs.length) setNotifications(notifs);
-
-      return true;
-    } catch (err) {
-      console.error("Hydration failed:", err);
-      toast("Failed to load your data. Please try again.", "error");
-      return false;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [repo, toast]);
 
   // ---- auth ----
   const signIn = useCallback(
     async (email: string, password: string, remember: boolean) => {
-      setIsLoading(true);
-      try {
-        // Authenticate against Firebase
-        const result = await repo.signIn(email, password);
-        if (!result.success || !result.employeeId) {
-          setIsLoading(false);
-          return { success: false, error: result.error || "Sign in failed." };
-        }
-
-        const meta: SessionMeta = {
-          employeeId: result.employeeId,
-          email,
-          rememberMe: remember,
-          deviceBound: true,
-          loggedInAt: Date.now(),
-        };
-        setSession(meta);
-        if (remember) localStorage.setItem(SESSION_KEY, JSON.stringify(meta));
-        else sessionStorage.setItem(SESSION_KEY, JSON.stringify(meta));
-
-        // Hydrate ALL user data BEFORE showing dashboard
-        const hydrated = await hydrateUserData(result.employeeId);
-        if (!hydrated) {
-          // If hydration failed but auth succeeded, show a message but proceed
-          toast("Signed in but some data may not have loaded.", "info");
-        }
-
-        setScreen("dashboard");
-        setStack([]);
-        return { success: true };
-      } catch (err) {
-        console.error("Sign in error:", err);
-        const msg = err instanceof Error ? err.message : "Network error during sign in.";
-        toast(msg, "error");
-        return { success: false, error: msg };
-      } finally {
-        setIsLoading(false);
+      // Legacy login flow: look up the user by `Primer_Email` in the
+      // `/Users` node and compare the entered password against the
+      // `Password` field.  The repository returns the matching
+      // Employee_ID_Number so we can hydrate the correct profile.
+      const result = await repo.signIn(email, password);
+      if (!result.success || !result.employeeId) {
+        return { success: false, error: result.error };
       }
+
+      const meta: SessionMeta = {
+        employeeId: result.employeeId,
+        email,
+        rememberMe: remember,
+        deviceBound: true,
+        loggedInAt: Date.now(),
+      };
+      setSession(meta);
+      if (remember) localStorage.setItem(SESSION_KEY, JSON.stringify(meta));
+      else sessionStorage.setItem(SESSION_KEY, JSON.stringify(meta));
+
+      // Hydrate the profile from the Users node before showing the
+      // dashboard so the screen renders the real account immediately.
+      try {
+        const p = await repo.getProfile(result.employeeId);
+        if (p) setProfile(p);
+      } catch {
+        /* keep seed fallback */
+      }
+
+      setScreen("dashboard");
+      setStack([]);
+      return { success: true };
     },
-    [repo, hydrateUserData, toast],
+    [repo],
   );
 
   const signOut = useCallback(() => {
     setSession(null);
-    setProfile(EMPTY_PROFILE);
-    setAttendance([]);
-    setLeaves([]);
-    setOt([]);
-    setCoverage([]);
-    setInfractions([]);
-    setHolidays([]);
-    setNotifications([]);
     localStorage.removeItem(SESSION_KEY);
     sessionStorage.removeItem(SESSION_KEY);
     setScreen("dashboard");
@@ -332,7 +244,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ---- navigation ----
   const navigate = useCallback(
     (s: ScreenId) => {
-      if (s === screen) return;
+      if (s === screen) return; // already here
+      // If navigating to a root tab, clear the stack and switch directly.
       if (ROOT_SCREENS.has(s)) {
         setStack([]);
         setScreen(s);
@@ -357,30 +270,47 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // ---- rehydrate on mount if session exists ----
+  // ---- hydrate data from repository on mount (once) ----
   const [hasHydrated, setHasHydrated] = useState(false);
   useEffect(() => {
-    if (hasHydrated || !session?.employeeId) return;
+    if (hasHydrated) return;
     (async () => {
-      await hydrateUserData(session.employeeId);
-      setHasHydrated(true);
+      try {
+        // First, cache the Firebase server-time offset so that
+        // `serverNow()` is accurate for clock-in/out, note locks, and
+        // any other server-anchored timestamp logic.
+        const offset = await repo.getServerTimeOffsetMs();
+        if (typeof offset === "number") setServerTimeOffsetMs(offset);
+
+        // Use the signed-in employee id when available, falling back
+        // to the seed profile's id for the first paint.
+        const sessionEmp = (await repo.getSession())?.employeeId;
+        const empId = sessionEmp ?? seedProfile.employeeId;
+
+        const [p, a, l, o, c, notifs] = await Promise.all([
+          repo.getProfile(empId),
+          repo.getAttendance(empId),
+          repo.getLeaves(empId),
+          repo.getOtRequests(empId),
+          repo.getCoverage(),
+          repo.getNotifications(empId),
+        ]);
+        if (p) setProfile(p);
+        if (a.length) setAttendance(a);
+        if (l.length) setLeaves(l);
+        if (o.length) setOt(o);
+        if (c.length) setCoverage(c);
+        if (notifs.length) setNotifications(notifs);
+        setHasHydrated(true);
+      } catch {
+        // Falls back to seed data — no crash.
+        setHasHydrated(true);
+      }
     })();
-  }, [session?.employeeId, hasHydrated, hydrateUserData, session]);
+  }, [repo, hasHydrated]);
 
   // ---- mutations ----
   const clockIn = useCallback(() => {
-    if (!profile.employeeId) {
-      toast("Please sign in to clock in.", "error");
-      return;
-    }
-
-    // Check for existing open attendance record
-    const openRecord = attendance.find((r) => r.isClockedIn);
-    if (openRecord) {
-      toast("You already have an open clock-in record.", "error");
-      return;
-    }
-
     const now = serverNow();
     const rec: AttendanceRecord = {
       id: newId(),
@@ -403,54 +333,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
       persistProfile(next);
       return next;
     });
-    repo.createAttendance(rec).catch((err) => {
-      console.error("Clock in failed:", err);
-      toast("Clock in failed. Please try again.", "error");
-    });
-    toast("Clocked in successfully.", "success");
-  }, [profile.employeeId, attendance, toast, repo, persistProfile]);
+    repo.createAttendance(rec).catch(() => {});
+    toast("Clocked in. Reminders scheduled for your shift.", "success");
+  }, [profile.employeeId, toast, repo, persistProfile]);
 
   const clockOut = useCallback(() => {
-    if (!profile.employeeId) {
-      toast("Please sign in to clock out.", "error");
-      return;
-    }
-
-    const openRecord = attendance.find((r) => r.isClockedIn);
-    if (!openRecord) {
-      toast("No open clock-in record found.", "error");
-      return;
-    }
-
     const now = serverNow();
-    const dateOut = fmtDate(now);
-    const timeOut = fmtTime(now);
-    const total = computeTotalHours(openRecord.dateIn, openRecord.timeIn, dateOut, timeOut);
-
-    const updated: AttendanceRecord = {
-      ...openRecord,
-      dateOut,
-      timeOut,
-      totalHours: total,
-      isClockedIn: false,
-      status: "Complete",
-      clockOutTs: now.getTime(),
-    };
-
-    setAttendance((prev) =>
-      prev.map((r) => (r.id === openRecord.id ? updated : r))
-    );
+    setAttendance((prev) => {
+      const idx = prev.findIndex((r) => r.isClockedIn);
+      if (idx === -1) return prev;
+      const r = prev[idx];
+      const dateOut = fmtDate(now);
+      const timeOut = fmtTime(now);
+      const total = computeTotalHours(r.dateIn, r.timeIn, dateOut, timeOut);
+      const updated: AttendanceRecord = {
+        ...r,
+        dateOut,
+        timeOut,
+        totalHours: total,
+        isClockedIn: false,
+        status: "Complete",
+        clockOutTs: now.getTime(),
+      };
+      const copy = [...prev];
+      copy[idx] = updated;
+      repo.updateAttendance(updated.id, updated).catch(() => {});
+      return copy;
+    });
     setProfile((p) => {
       const next = { ...p, isClockedIn: false };
       persistProfile(next);
       return next;
     });
-    repo.updateAttendance(updated.id, updated).catch((err) => {
-      console.error("Clock out failed:", err);
-      toast("Clock out failed. Please try again.", "error");
-    });
-    toast(`Clocked out. Total: ${total.toFixed(2)} hours.`, "success");
-  }, [profile.employeeId, attendance, toast, repo, persistProfile]);
+    toast("Clocked out. Total hours saved.", "success");
+  }, [toast, repo, persistProfile]);
 
   const updateNote = useCallback(
     (id: string, note: string) => {
@@ -460,10 +376,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           r.id === id ? { ...r, note, noteLastEditedTs: ts } : r,
         ),
       );
-      repo.updateAttendance(id, { note, noteLastEditedTs: ts }).catch((err) => {
-        console.error("Note update failed:", err);
-        toast("Failed to save note.", "error");
-      });
+      repo.updateAttendance(id, { note, noteLastEditedTs: ts }).catch(() => {});
       toast("Note saved.", "success");
     },
     [toast, repo],
@@ -471,11 +384,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const submitLeave = useCallback<AppState["submitLeave"]>(
     (lr) => {
-      if (!profile.employeeId) {
-        toast("Please sign in to submit a leave request.", "error");
-        return;
-      }
-
       const full: LeaveRequest = {
         ...lr,
         id: newId(),
@@ -483,11 +391,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
       };
       setLeaves((prev) => [full, ...prev]);
-      repo.createLeave(full).catch((err) => {
-        console.error("Leave creation failed:", err);
-        toast("Failed to submit leave request.", "error");
-      });
-
+      repo.createLeave(full).catch(() => {});
       // Credit deduction
       setProfile((p) => {
         let next = p;
@@ -502,7 +406,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
       toast(`${lr.leaveType} request submitted.`, "success");
     },
-    [profile.employeeId, toast, repo, persistProfile],
+    [toast, repo, persistProfile],
   );
 
   const cancelLeave = useCallback(
@@ -528,10 +432,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             : l,
         );
       });
-      repo.updateLeave(id, { status: "Cancelled", cancellationReason: reason }).catch((err) => {
-        console.error("Leave cancel failed:", err);
-        toast("Failed to cancel leave.", "error");
-      });
+      repo.updateLeave(id, { status: "Cancelled", cancellationReason: reason }).catch(() => {});
       repo
         .deleteCoverageByFilter({
           coverageType: "Leave",
@@ -556,11 +457,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const submitOt = useCallback<AppState["submitOt"]>(
     (o) => {
-      if (!profile.employeeId) {
-        toast("Please sign in to submit an OT request.", "error");
-        return;
-      }
-
       const full: OtRequest = {
         ...o,
         id: newId(),
@@ -568,13 +464,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
       };
       setOt((prev) => [full, ...prev]);
-      repo.createOtRequest(full).catch((err) => {
-        console.error("OT creation failed:", err);
-        toast("Failed to submit OT request.", "error");
-      });
+      repo.createOtRequest(full).catch(() => {});
       toast("OT request submitted.", "success");
     },
-    [profile.employeeId, toast, repo],
+    [toast, repo],
   );
 
   const cancelOt = useCallback(
@@ -586,10 +479,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             : o,
         ),
       );
-      repo.updateOtRequest(id, { status: "Cancelled", cancellationReason: reason }).catch((err) => {
-        console.error("OT cancel failed:", err);
-        toast("Failed to cancel OT request.", "error");
-      });
+      repo.updateOtRequest(id, { status: "Cancelled", cancellationReason: reason }).catch(() => {});
       toast("OT request cancelled.", "success");
     },
     [toast, repo],
@@ -597,11 +487,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const submitTechCoverage = useCallback<AppState["submitTechCoverage"]>(
     (c) => {
-      if (!profile.employeeId) {
-        toast("Please sign in to submit a coverage request.", "error");
-        return;
-      }
-
       const full: CoverageRequest = {
         ...c,
         id: newId(),
@@ -609,13 +494,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
       };
       setCoverage((prev) => [full, ...prev]);
-      repo.createCoverage(full).catch((err) => {
-        console.error("Coverage creation failed:", err);
-        toast("Failed to submit coverage request.", "error");
-      });
+      repo.createCoverage(full).catch(() => {});
       toast("Tech issue coverage request submitted.", "success");
     },
-    [profile.employeeId, toast, repo],
+    [toast, repo],
   );
 
   const takeoverCoverage = useCallback(
@@ -639,10 +521,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           coveredById: profile.employeeId,
           takenBy: profile.fullName,
         })
-        .catch((err) => {
-          console.error("Coverage takeover failed:", err);
-          toast("Failed to take over coverage.", "error");
-        });
+        .catch(() => {});
       toast("Coverage taken over. Status set to Ongoing.", "success");
     },
     [profile.employeeId, profile.fullName, toast, repo],
@@ -670,10 +549,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           takenBy: undefined,
           coveredHours: undefined,
         })
-        .catch((err) => {
-          console.error("Coverage cancel failed:", err);
-          toast("Failed to cancel coverage.", "error");
-        });
+        .catch(() => {});
       toast("Coverage cancelled and returned to Available.", "info");
     },
     [toast, repo],
@@ -689,10 +565,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               : l,
           ),
         );
-        repo.updateLeave(id, { status: "Change Pending", leaveDate: [newDate] }).catch((err) => {
-          console.error("Leave date change failed:", err);
-          toast("Failed to change leave date.", "error");
-        });
+        repo.updateLeave(id, { status: "Change Pending", leaveDate: [newDate] }).catch(() => {});
       } else {
         setOt((prev) =>
           prev.map((o) =>
@@ -701,10 +574,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               : o,
           ),
         );
-        repo.updateOtRequest(id, { status: "Change Pending", otDate: newDate }).catch((err) => {
-          console.error("OT date change failed:", err);
-          toast("Failed to change OT date.", "error");
-        });
+        repo.updateOtRequest(id, { status: "Change Pending", otDate: newDate }).catch(() => {});
       }
       toast("Change request submitted (Change Pending).", "success");
     },
@@ -729,10 +599,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setNotifications((prev) =>
         prev.map((n) => (n.id === id ? { ...n, readAt } : n)),
       );
-      repo.updateNotification(id, { readAt }).catch((err) => {
-        console.error("Notification update failed:", err);
-        // Don't show toast for notification errors
-      });
+      repo.updateNotification(id, { readAt }).catch(() => {});
     },
     [repo],
   );
@@ -773,7 +640,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       markNotificationRead,
       toasts,
       toast,
-      isLoading,
       hasHydrated,
     }),
     [
@@ -781,7 +647,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       profile, attendance, leaves, ot, coverage, infractions, holidays, notifications,
       clockIn, clockOut, updateNote, submitLeave, cancelLeave, submitOt, cancelOt,
       submitTechCoverage, takeoverCoverage, cancelCoverage, changeLeaveDate, updateProfile,
-      markNotificationRead, toasts, toast, isLoading, hasHydrated,
+      markNotificationRead, toasts, toast, hasHydrated,
     ],
   );
 

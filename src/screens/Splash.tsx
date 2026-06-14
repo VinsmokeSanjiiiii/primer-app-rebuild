@@ -47,8 +47,8 @@ export function Splash({ onDone }: { onDone: () => void }) {
           <Icon name="shield" size={42} />
         </div>
         <div className="text-center">
-          <h1 className="text-2xl font-black tracking-tight">Primer Communications</h1>
-          <p className="text-sm text-white/80">Employee Self-Service Portal</p>
+          <h1 className="text-2xl font-black tracking-tight">PrimerHR</h1>
+          <p className="text-sm text-white/80">Employee Self-Service</p>
         </div>
       </div>
 

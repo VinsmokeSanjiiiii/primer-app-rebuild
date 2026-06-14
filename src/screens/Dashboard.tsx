@@ -7,6 +7,7 @@ import { tenureFrom } from "../lib/date";
 export function Dashboard() {
   const { profile, leaves, ot, infractions, navigate, notifications } = useApp();
   const [reqOpen, setReqOpen] = useState(false);
+  const [showFullEmail, setShowFullEmail] = useState(false);
   const unread = notifications.filter((n) => !n.readAt).length;
   const userInfractions = infractions.filter((i) => i.employeeId === profile.employeeId);
   const infractionCount = userInfractions.length;
@@ -40,10 +41,18 @@ export function Dashboard() {
         <div className="min-w-0 flex-1">
           <p className="text-xs text-slate-400">Welcome back,</p>
           <h1 className="truncate text-lg font-black text-slate-900 dark:text-white">
-            {profile.fullName || "Employee"}
+            {profile.fullName}
           </h1>
           <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-            {profile.position} {profile.team && `· ${profile.team}`}
+            {profile.position} ·{" "}
+            <span
+              className="cursor-pointer underline decoration-dotted hover:decoration-solid"
+              onClick={() => setShowFullEmail(true)}
+            >
+              {profile.primerEmail.length > 28
+                ? profile.primerEmail.slice(0, 25) + "..."
+                : profile.primerEmail}
+            </span>
           </p>
         </div>
         <button
@@ -77,7 +86,7 @@ export function Dashboard() {
                 {profile.isClockedIn ? "Clocked In" : "Clocked Out"}
               </p>
             </div>
-            <p className="mt-1 text-xs text-white/70">Schedule {profile.schedule || "Not set"}</p>
+            <p className="mt-1 text-xs text-white/70">Schedule {profile.schedule}</p>
           </div>
           <div className="flex flex-col items-center gap-1">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/15">
@@ -110,16 +119,16 @@ export function Dashboard() {
       </SectionTitle>
       <Card>
         <div className="grid grid-cols-2 gap-y-3">
-          <Field label="Role" value={profile.role || "-"} />
-          <Field label="Team" value={profile.team || "-"} />
-          <Field label="Department" value={profile.department || "-"} />
-          <Field label="Days off" value={profile.daysOff || "-"} />
-          <Field label="Date started" value={profile.dateStarted || "-"} />
-          <Field label="Tenure" value={tenureFrom(profile.dateStarted) || "-"} />
-          <Field label="Work setup" value={profile.workSetup || "-"} />
+          <Field label="Role" value={profile.role} />
+          <Field label="Team" value={profile.team} />
+          <Field label="Email" value={profile.primerEmail} />
+          <Field label="Days off" value={profile.daysOff} />
+          <Field label="Date started" value={profile.dateStarted} />
+          <Field label="Tenure" value={tenureFrom(profile.dateStarted)} />
+          <Field label="Work setup" value={profile.workSetup} />
           <Field
             label="Status"
-            value={<Badge tone={profile.status === "Active" ? "green" : "slate"}>{profile.status || "Unknown"}</Badge>}
+            value={<Badge tone="green">{profile.status}</Badge>}
           />
         </div>
       </Card>
@@ -150,6 +159,22 @@ export function Dashboard() {
           ))}
         </div>
       )}
+
+      {/* Full email dialog */}
+      <Dialog
+        open={showFullEmail}
+        onClose={() => setShowFullEmail(false)}
+        title="Email address"
+        footer={
+          <Button full onClick={() => setShowFullEmail(false)}>
+            Close
+          </Button>
+        }
+      >
+        <p className="text-center font-mono text-sm break-all text-slate-700 dark:text-slate-200">
+          {profile.primerEmail}
+        </p>
+      </Dialog>
 
       {/* Request type chooser */}
       <Dialog

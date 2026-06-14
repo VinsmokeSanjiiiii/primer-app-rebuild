@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Primer Communications</string>
-    <string name="title_activity_main">Primer Communications</string>
+    <string name="app_name">Primer</string>
+    <string name="title_activity_main">Primer</string>
     <string name="package_name">com.primer.app</string>
     <string name="custom_url_scheme">com.primer.app</string>
 </resources>
