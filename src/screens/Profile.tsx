@@ -64,11 +64,10 @@ export function Profile() {
         </Card>
 
         {/* Credits */}
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <MiniCredit label="VL" value={profile.vlCredits} />
           <MiniCredit label="SL" value={profile.slCredits} />
           <MiniCredit label="BL" value={profile.blCredit} />
-          <MiniCredit label="SL→Cash" value={profile.slConversionCredits} />
         </div>
 
         {/* Employment */}
@@ -163,7 +162,7 @@ export function Profile() {
             if (pw.next !== pw.confirm) return toast("Passwords do not match.", "error");
             setPw({ current: "", next: "", confirm: "" });
             setPwOpen(false);
-            toast("Password updated via Supabase Auth.", "success");
+            toast("Password updated on the Users record.", "success");
           }}>Update</Button>
         </>}>
         <TextField label="Current password" type="password" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} />

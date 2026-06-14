@@ -261,11 +261,12 @@ export function Spinner({ size = 24 }: { size?: number }) {
 }
 
 export function Field({ label, value }: { label: string; value: ReactNode }) {
+  const display = value || "N/A";
   return (
     <div>
       <p className="text-xs font-medium text-slate-400">{label}</p>
       <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-        {value || "—"}
+        {display}
       </p>
     </div>
   );

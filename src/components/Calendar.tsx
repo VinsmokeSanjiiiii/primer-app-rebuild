@@ -82,7 +82,7 @@ export function Calendar({
                 disabled &&
                   "cursor-not-allowed text-slate-300 line-through hover:bg-transparent dark:text-slate-600",
                 isHoliday && !isSel && "text-rose-400",
-                isToday && !isSel && "ring-1 ring-indigo-400",
+                isToday && !isSel && "ring-2 ring-indigo-400 ring-offset-2",
               )}
             >
               {d.getDate()}

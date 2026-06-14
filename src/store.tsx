@@ -30,7 +30,14 @@ import {
   newId,
 } from "./data/seed";
 import { getRepository } from "./data/repository";
-import { fmtDate, fmtTime, serverNow, monthName, computeTotalHours } from "./lib/date";
+import {
+  fmtDate,
+  fmtTime,
+  serverNow,
+  monthName,
+  computeTotalHours,
+  setServerTimeOffsetMs,
+} from "./lib/date";
 
 // ---------------------------------------------------------------------------
 // Keys for local persistence (DataStore analogue)
@@ -59,7 +66,11 @@ interface AppState {
   // auth + session
   isAuthed: boolean;
   session: SessionMeta | null;
-  signIn: (email: string, remember: boolean) => void;
+  signIn: (
+    email: string,
+    password: string,
+    remember: boolean,
+  ) => Promise<{ success: boolean; error?: string }>;
   signOut: () => void;
 
   // theme
@@ -100,6 +111,9 @@ interface AppState {
   // toasts
   toasts: Toast[];
   toast: (text: string, kind?: Toast["kind"]) => void;
+
+  // internal
+  hasHydrated: boolean;
 }
 
 const Ctx = createContext<AppState | null>(null);
@@ -172,9 +186,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // ---- auth ----
   const signIn = useCallback(
-    (email: string, remember: boolean) => {
+    async (email: string, password: string, remember: boolean) => {
+      // Legacy login flow: look up the user by `Primer_Email` in the
+      // `/Users` node and compare the entered password against the
+      // `Password` field.  The repository returns the matching
+      // Employee_ID_Number so we can hydrate the correct profile.
+      const result = await repo.signIn(email, password);
+      if (!result.success || !result.employeeId) {
+        return { success: false, error: result.error };
+      }
+
       const meta: SessionMeta = {
-        employeeId: seedProfile.employeeId,
+        employeeId: result.employeeId,
         email,
         rememberMe: remember,
         deviceBound: true,
@@ -183,10 +206,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setSession(meta);
       if (remember) localStorage.setItem(SESSION_KEY, JSON.stringify(meta));
       else sessionStorage.setItem(SESSION_KEY, JSON.stringify(meta));
+
+      // Hydrate the profile from the Users node before showing the
+      // dashboard so the screen renders the real account immediately.
+      try {
+        const p = await repo.getProfile(result.employeeId);
+        if (p) setProfile(p);
+      } catch {
+        /* keep seed fallback */
+      }
+
       setScreen("dashboard");
       setStack([]);
+      return { success: true };
     },
-    [],
+    [repo],
   );
 
   const signOut = useCallback(() => {
@@ -236,27 +270,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // ---- hydrate data from repository on mount ----
+  // ---- hydrate data from repository on mount (once) ----
+  const [hasHydrated, setHasHydrated] = useState(false);
   useEffect(() => {
+    if (hasHydrated) return;
     (async () => {
       try {
-        const [p, a, l, o, c] = await Promise.all([
-          repo.getProfile(seedProfile.employeeId),
-          repo.getAttendance(seedProfile.employeeId),
-          repo.getLeaves(seedProfile.employeeId),
-          repo.getOtRequests(seedProfile.employeeId),
+        // First, cache the Firebase server-time offset so that
+        // `serverNow()` is accurate for clock-in/out, note locks, and
+        // any other server-anchored timestamp logic.
+        const offset = await repo.getServerTimeOffsetMs();
+        if (typeof offset === "number") setServerTimeOffsetMs(offset);
+
+        // Use the signed-in employee id when available, falling back
+        // to the seed profile's id for the first paint.
+        const sessionEmp = (await repo.getSession())?.employeeId;
+        const empId = sessionEmp ?? seedProfile.employeeId;
+
+        const [p, a, l, o, c, notifs] = await Promise.all([
+          repo.getProfile(empId),
+          repo.getAttendance(empId),
+          repo.getLeaves(empId),
+          repo.getOtRequests(empId),
           repo.getCoverage(),
+          repo.getNotifications(empId),
         ]);
         if (p) setProfile(p);
         if (a.length) setAttendance(a);
         if (l.length) setLeaves(l);
         if (o.length) setOt(o);
         if (c.length) setCoverage(c);
+        if (notifs.length) setNotifications(notifs);
+        setHasHydrated(true);
       } catch {
         // Falls back to seed data — no crash.
+        setHasHydrated(true);
       }
     })();
-  }, [repo]);
+  }, [repo, hasHydrated]);
 
   // ---- mutations ----
   const clockIn = useCallback(() => {
@@ -589,13 +640,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       markNotificationRead,
       toasts,
       toast,
+      hasHydrated,
     }),
     [
       session, signIn, signOut, dark, toggleDark, screen, navigate, back, stack.length,
       profile, attendance, leaves, ot, coverage, infractions, holidays, notifications,
       clockIn, clockOut, updateNote, submitLeave, cancelLeave, submitOt, cancelOt,
       submitTechCoverage, takeoverCoverage, cancelCoverage, changeLeaveDate, updateProfile,
-      markNotificationRead, toasts, toast,
+      markNotificationRead, toasts, toast, hasHydrated,
     ],
   );
 

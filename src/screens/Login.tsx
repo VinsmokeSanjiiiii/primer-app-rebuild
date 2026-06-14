@@ -20,17 +20,25 @@ export function Login() {
       return;
     }
     setLoading(true);
-    // Simulate Supabase Auth + device-binding challenge/response.
-    await new Promise((r) => setTimeout(r, 1100));
-    // Simulate occasional network failure with retry messaging.
-    if (Math.random() < 0.12) {
+    // Real legacy login: look up the user in /Users by Primer_Email and
+    // compare against the stored Password field.  Network failures and
+    // bad credentials are surfaced through the returned error.
+    try {
+      const result = await signIn(email, password, remember);
+      if (!result.success) {
+        setError(result.error || "Sign in failed.");
+        toast("Sign in failed — check your credentials.", "error");
+      }
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? `Network error: ${e.message}`
+          : "Network error during sign in. Please retry.",
+      );
+      toast("Network error during sign in.", "error");
+    } finally {
       setLoading(false);
-      setError("Network error during secure verification. Please retry.");
-      toast("Network failure — falling back is available.", "error");
-      return;
     }
-    setLoading(false);
-    signIn(email, remember);
   };
 
   return (
@@ -108,9 +116,17 @@ export function Login() {
         </Button>
 
         <button
-          onClick={() => {
+          onClick={async () => {
             setBiometric(true);
-            setTimeout(() => signIn(email, true), 900);
+            try {
+              const result = await signIn(email, password, true);
+              if (!result.success) {
+                setError(result.error || "Biometric unlock failed.");
+                toast("Biometric unlock failed.", "error");
+              }
+            } finally {
+              setBiometric(false);
+            }
           }}
           className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-white/15 dark:text-slate-200 dark:hover:bg-white/5"
         >
@@ -124,8 +140,8 @@ export function Login() {
           <Icon name="shield" size={14} /> Secured with device binding + RSA SHA-256
         </p>
         <p className="mt-1">
-          Auth via Supabase. Plaintext passwords are never stored. Public-key
-          challenge/response is a secondary layer.
+          Auth against the original Firebase Realtime Database <code>/Users</code> node.
+          Device binding and public-key challenge/response are a secondary layer.
         </p>
       </div>
     </div>

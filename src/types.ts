@@ -1,5 +1,6 @@
 // Single source of truth for all domain models.
-// Mirrors the Supabase schema described in the brief.
+// Mirrors the legacy `primer3` Firebase Realtime Database tree — see
+// `src/data/repository.ts` for the field-level mapping.
 
 export type LeaveType =
   | "Vacation Leave"

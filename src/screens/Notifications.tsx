@@ -4,12 +4,32 @@ import { Card, EmptyState, Badge } from "../components/ui";
 import { Icon } from "../components/Icon";
 
 export function Notifications() {
-  const { notifications, markNotificationRead } = useApp();
+  const { notifications, markNotificationRead, profile } = useApp();
   const sorted = [...notifications].sort((a, b) => b.createdAt - a.createdAt);
+  const unreadCount = notifications.filter((n) => !n.readAt).length;
+
+  const markAllAsRead = () => {
+    notifications.forEach((n) => {
+      if (!n.readAt) markNotificationRead(n.id);
+    });
+  };
 
   return (
     <div className="flex h-full flex-col">
-      <AppBar title="Notifications" subtitle="Inbox" />
+      <AppBar
+        title="Notifications"
+        subtitle={`Inbox • ${unreadCount} unread`}
+        action={
+          unreadCount > 0 && (
+            <button
+              onClick={markAllAsRead}
+              className="rounded-full px-3 py-1 text-xs font-semibold text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-white/5"
+            >
+              Mark all read
+            </button>
+          )
+        }
+      />
       <div className="flex-1 space-y-2 overflow-y-auto px-4 pb-6 pt-4">
         {sorted.length === 0 ? (
           <EmptyState icon="bell" title="No notifications" />

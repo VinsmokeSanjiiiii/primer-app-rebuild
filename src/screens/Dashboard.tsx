@@ -1,13 +1,16 @@
 import { useState } from "react";
 import { useApp } from "../store";
-import { Card, Avatar, Badge, Dialog, Field, SectionTitle } from "../components/ui";
+import { Card, Avatar, Badge, Button, Dialog, Field, SectionTitle } from "../components/ui";
 import { Icon, type IconName } from "../components/Icon";
 import { tenureFrom } from "../lib/date";
 
 export function Dashboard() {
   const { profile, leaves, ot, infractions, navigate, notifications } = useApp();
   const [reqOpen, setReqOpen] = useState(false);
+  const [showFullEmail, setShowFullEmail] = useState(false);
   const unread = notifications.filter((n) => !n.readAt).length;
+  const userInfractions = infractions.filter((i) => i.employeeId === profile.employeeId);
+  const infractionCount = userInfractions.length;
 
   const pending = [
     ...leaves
@@ -41,7 +44,15 @@ export function Dashboard() {
             {profile.fullName}
           </h1>
           <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-            {profile.position} · {profile.employeeId}
+            {profile.position} ·{" "}
+            <span
+              className="cursor-pointer underline decoration-dotted hover:decoration-solid"
+              onClick={() => setShowFullEmail(true)}
+            >
+              {profile.primerEmail.length > 28
+                ? profile.primerEmail.slice(0, 25) + "..."
+                : profile.primerEmail}
+            </span>
           </p>
         </div>
         <button
@@ -99,7 +110,7 @@ export function Dashboard() {
         <QuickAction icon="plus" label="Request" onClick={() => setReqOpen(true)} />
         <QuickAction icon="clock" label="Clock" onClick={() => navigate("clock")} />
         <QuickAction icon="swap" label="Coverage" onClick={() => navigate("coverage")} />
-        <QuickAction icon="alert" label="Infractions" onClick={() => navigate("infractions")} badge={infractions.length} />
+        <QuickAction icon="alert" label="Infractions" onClick={() => navigate("infractions")} badge={infractionCount} />
       </div>
 
       {/* Profile summary */}
@@ -148,6 +159,22 @@ export function Dashboard() {
           ))}
         </div>
       )}
+
+      {/* Full email dialog */}
+      <Dialog
+        open={showFullEmail}
+        onClose={() => setShowFullEmail(false)}
+        title="Email address"
+        footer={
+          <Button full onClick={() => setShowFullEmail(false)}>
+            Close
+          </Button>
+        }
+      >
+        <p className="text-center font-mono text-sm break-all text-slate-700 dark:text-slate-200">
+          {profile.primerEmail}
+        </p>
+      </Dialog>
 
       {/* Request type chooser */}
       <Dialog

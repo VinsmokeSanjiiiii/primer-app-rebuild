@@ -9,6 +9,7 @@ export function Clock() {
   const { profile, clockIn, clockOut, navigate, attendance } = useApp();
   const [now, setNow] = useState(serverNow());
   const [verifying, setVerifying] = useState(false);
+  const skewMs = Math.abs(Date.now() - serverNow().getTime());
 
   useEffect(() => {
     const t = setInterval(() => setNow(serverNow()), 1000);
@@ -48,8 +49,8 @@ export function Clock() {
         <div className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm ${safe ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300" : "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300"}`}>
           <Icon name={safe ? "shield" : "alert"} size={16} />
           {safe
-            ? "Device time matches server time. Clock actions allowed."
-            : "Device clock is off by more than 5 minutes. Clock actions blocked."}
+            ? `Server time synchronized (${skewMs} ms offset). Clock actions allowed.`
+            : `Device clock is off by ${Math.round(skewMs / 1000)} seconds. Clock actions blocked.`}
         </div>
 
         {/* Open record */}

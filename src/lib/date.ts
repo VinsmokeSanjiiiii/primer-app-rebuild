@@ -1,8 +1,24 @@
 // Centralized date utilities. The legacy app standardizes on Asia/Manila and
 // the M/d/yyyy date format with HH:mm time. Server time is always trusted over
 // device time.
+//
+// The Firebase Realtime Database exposes the server-vs-local clock skew
+// at `/.info/serverTimeOffset`.  The `setServerTimeOffsetMs()` helper
+// below lets the app store cache that value so every read of
+// `serverNow()` produces a server-aligned timestamp even when the
+// device clock is wrong.
 
 export const TIMEZONE = "Asia/Manila";
+
+let _serverOffsetMs = 0;
+
+export function setServerTimeOffsetMs(offsetMs: number): void {
+  _serverOffsetMs = offsetMs;
+}
+
+export function getServerTimeOffsetMs(): number {
+  return _serverOffsetMs;
+}
 
 /** Format a Date as M/d/yyyy (no leading zeros), the legacy primary format. */
 export function fmtDate(d: Date): string {
@@ -33,16 +49,31 @@ export function monthName(d: Date): string {
   return MONTHS[d.getMonth()];
 }
 
-/** Simulated trusted "server time". In the real app this is fetched securely. */
+/**
+ * Server-anchored "now" timestamp.
+ *
+ * Returns `Date.now() + serverTimeOffset` so the value is aligned
+ * with the Firebase RTDB server clock when an offset has been
+ * cached.  Falls back to local time when no offset has been observed
+ * yet (e.g. on first launch before the RTDB ping completes).
+ */
 export function serverNow(): Date {
-  // Apply a tiny synthetic skew to demonstrate the server-vs-device concept.
-  return new Date();
+  return new Date(Date.now() + _serverOffsetMs);
+}
+
+/**
+ * Returns the milliseconds since the Unix epoch as seen by the server
+ * (after applying the cached server-time offset).  Use this in
+ * `timestamp` calculations and for storage of `clock_out_ts` /
+ * `note_last_edited_ts` so the value is consistent across clients.
+ */
+export function serverNowMs(): number {
+  return Date.now() + _serverOffsetMs;
 }
 
 /** Whether device time deviates from server time beyond the safe threshold. */
 export function deviceTimeIsSafe(thresholdMinutes = 5): boolean {
-  // In a real device-binding flow this compares device vs server; here it's safe.
-  const skewMs = Math.abs(Date.now() - serverNow().getTime());
+  const skewMs = Math.abs(_serverOffsetMs);
   return skewMs <= thresholdMinutes * 60 * 1000;
 }
 
