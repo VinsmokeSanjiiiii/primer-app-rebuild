@@ -38,7 +38,7 @@ import type {
   AppNotification,
 } from "../types";
 
-import { getDb, isFirebaseConfigured } from "./firebase";
+import { getDb, isFirebaseConfigured, isDevelopmentOfflineMode } from "./firebase";
 
 import {
   ref,
@@ -1071,9 +1071,14 @@ let _instance: Repository | null = null;
 
 export function getRepository(): Repository {
   if (_instance) return _instance;
-  _instance = isFirebaseConfigured()
-    ? new FirebaseRepository()
-    : new LocalOfflineRepository();
+  // Use Firebase when configured. Only fall back to offline seed data
+  // when explicitly in development offline mode (VITE_OFFLINE_MODE=true).
+  // This prevents seed data from ever overriding real Firebase data.
+  if (isFirebaseConfigured() && !isDevelopmentOfflineMode()) {
+    _instance = new FirebaseRepository();
+  } else {
+    _instance = new LocalOfflineRepository();
+  }
   return _instance;
 }
 
