@@ -62,6 +62,13 @@ interface SessionMeta {
   loggedInAt: number;
 }
 
+interface SignInResult {
+  success: boolean;
+  error?: string;
+  employeeId?: string;
+  fullName?: string;
+}
+
 interface AppState {
   // auth + session
   isAuthed: boolean;
@@ -70,7 +77,11 @@ interface AppState {
     email: string,
     password: string,
     remember: boolean,
-  ) => Promise<{ success: boolean; error?: string }>;
+  ) => Promise<SignInResult>;
+  signInWithEmployeeId: (
+    employeeId: string,
+    remember: boolean,
+  ) => Promise<SignInResult>;
   signOut: () => void;
 
   // theme
@@ -184,20 +195,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [repo],
   );
 
-  // ---- auth ----
-  const signIn = useCallback(
-    async (email: string, password: string, remember: boolean) => {
-      // Legacy login flow: look up the user by `Primer_Email` in the
-      // `/Users` node and compare the entered password against the
-      // `Password` field.  The repository returns the matching
-      // Employee_ID_Number so we can hydrate the correct profile.
-      const result = await repo.signIn(email, password);
-      if (!result.success || !result.employeeId) {
-        return { success: false, error: result.error };
-      }
+  // ---- full hydration helper ----
+  // Loads every per-user collection in parallel and applies them
+  // atomically so the dashboard only renders once the data is real.
+  const hydrateAll = useCallback(
+    async (empId: string) => {
+      const [p, a, l, o, c, notifs] = await Promise.all([
+        repo.getProfile(empId).catch(() => null),
+        repo.getAttendance(empId).catch(() => []),
+        repo.getLeaves(empId).catch(() => []),
+        repo.getOtRequests(empId).catch(() => []),
+        repo.getCoverage().catch(() => []),
+        repo.getNotifications(empId).catch(() => []),
+      ]);
+      if (p) setProfile(p);
+      setAttendance(a);
+      setLeaves(l);
+      setOt(o);
+      setCoverage(c);
+      setNotifications(notifs);
+      return p;
+    },
+    [repo],
+  );
 
+  // ---- auth ----
+  const finalizeSignIn = useCallback(
+    async (
+      employeeId: string,
+      email: string,
+      remember: boolean,
+    ): Promise<SignInResult> => {
       const meta: SessionMeta = {
-        employeeId: result.employeeId,
+        employeeId,
         email,
         rememberMe: remember,
         deviceBound: true,
@@ -207,20 +237,51 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (remember) localStorage.setItem(SESSION_KEY, JSON.stringify(meta));
       else sessionStorage.setItem(SESSION_KEY, JSON.stringify(meta));
 
-      // Hydrate the profile from the Users node before showing the
-      // dashboard so the screen renders the real account immediately.
-      try {
-        const p = await repo.getProfile(result.employeeId);
-        if (p) setProfile(p);
-      } catch {
-        /* keep seed fallback */
-      }
+      // Hydrate everything before the dashboard mounts so no screen
+      // ever shows stale or seed data after a successful login.
+      const p = await hydrateAll(employeeId);
 
       setScreen("dashboard");
       setStack([]);
-      return { success: true };
+      return { success: true, employeeId, fullName: p?.fullName };
     },
-    [repo],
+    [hydrateAll],
+  );
+
+  const signIn = useCallback(
+    async (
+      email: string,
+      password: string,
+      remember: boolean,
+    ): Promise<SignInResult> => {
+      const result = await repo.signIn(email, password);
+      if (!result.success || !result.employeeId) {
+        return { success: false, error: result.error };
+      }
+      return finalizeSignIn(result.employeeId, email, remember);
+    },
+    [repo, finalizeSignIn],
+  );
+
+  const signInWithEmployeeId = useCallback(
+    async (employeeId: string, remember: boolean): Promise<SignInResult> => {
+      // Used by the biometric unlock flow: the WebAuthn ceremony has
+      // already proven the user is the device owner, so we trust the
+      // stored employeeId and refresh the session.
+      try {
+        const p = await repo.getProfile(employeeId);
+        if (!p) {
+          return { success: false, error: "Account no longer exists." };
+        }
+        return finalizeSignIn(employeeId, p.primerEmail, remember);
+      } catch (e) {
+        return {
+          success: false,
+          error: e instanceof Error ? e.message : "Sign in failed.",
+        };
+      }
+    },
+    [repo, finalizeSignIn],
   );
 
   const signOut = useCallback(() => {
@@ -311,31 +372,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // ---- mutations ----
   const clockIn = useCallback(() => {
-    const now = serverNow();
-    const rec: AttendanceRecord = {
-      id: newId(),
-      attendanceCode: `ATT-${Math.floor(Math.random() * 9000 + 1000)}`,
-      employeeId: profile.employeeId,
-      dateIn: fmtDate(now),
-      timeIn: fmtTime(now),
-      note: "",
-      noteLocked: false,
-      minsLate: 0,
-      recordType: "Regular",
-      status: "Open",
-      isClockedIn: true,
-      month: monthName(now),
-      year: now.getFullYear(),
-    };
-    setAttendance((prev) => [rec, ...prev]);
+    // Guard against duplicate open attendance records — if there is
+    // already an open clock-in, surface a toast instead of stacking
+    // another row on top.
+    let alreadyOpen = false;
+    setAttendance((prev) => {
+      alreadyOpen = prev.some((r) => r.isClockedIn);
+      if (alreadyOpen) return prev;
+      const now = serverNow();
+      const rec: AttendanceRecord = {
+        id: newId(),
+        attendanceCode: `ATT-${Math.floor(Math.random() * 9000 + 1000)}`,
+        employeeId: profile.employeeId,
+        dateIn: fmtDate(now),
+        timeIn: fmtTime(now),
+        note: "",
+        noteLocked: false,
+        minsLate: 0,
+        recordType: "Regular",
+        status: "Open",
+        isClockedIn: true,
+        month: monthName(now),
+        year: now.getFullYear(),
+      };
+      repo.createAttendance(rec).catch(() => {});
+      return [rec, ...prev];
+    });
+    if (alreadyOpen) {
+      toast("You're already clocked in.", "info");
+      return;
+    }
     setProfile((p) => {
       const next = { ...p, isClockedIn: true };
       persistProfile(next);
       return next;
     });
-    repo.createAttendance(rec).catch(() => {});
     toast("Clocked in. Reminders scheduled for your shift.", "success");
   }, [profile.employeeId, toast, repo, persistProfile]);
+
 
   const clockOut = useCallback(() => {
     const now = serverNow();
@@ -610,6 +684,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       isAuthed: !!session,
       session,
       signIn,
+      signInWithEmployeeId,
       signOut,
       dark,
       toggleDark,
@@ -643,7 +718,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       hasHydrated,
     }),
     [
-      session, signIn, signOut, dark, toggleDark, screen, navigate, back, stack.length,
+      session, signIn, signInWithEmployeeId, signOut, dark, toggleDark, screen, navigate, back, stack.length,
       profile, attendance, leaves, ot, coverage, infractions, holidays, notifications,
       clockIn, clockOut, updateNote, submitLeave, cancelLeave, submitOt, cancelOt,
       submitTechCoverage, takeoverCoverage, cancelCoverage, changeLeaveDate, updateProfile,

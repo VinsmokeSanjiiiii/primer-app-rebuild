@@ -1,31 +1,26 @@
 /**
- * Firebase client singleton.
+ * Firebase client singleton — Primer Communications.
  *
- * Uses the original `primer3` Firebase project configuration that was
- * extracted from the legacy `google-services.json`.  The same config is
- * safe to embed in the web client because Firebase Realtime Database
- * security rules (not API keys) gate data access.
+ * Uses the original `primerdb2` Firebase project configuration as the
+ * canonical source of truth. The web client connects directly to the
+ * Realtime Database; the embedded API key is the public Web SDK key
+ * (Firebase RTDB access is gated by security rules, not by the key).
  *
- * Paths and key naming follow the original app's structure exactly —
- * see repository.ts for the field-level mapping.
+ * Each value can be overridden at build time with `VITE_FB_*` env
+ * variables for staging/dev sandboxes (see `.env.example`).
  */
 import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
 import { getDatabase, type Database } from "firebase/database";
 import { getStorage, type FirebaseStorage } from "firebase/storage";
+import { getAuth, type Auth } from "firebase/auth";
 
 /**
- * Default Firebase project configuration.
+ * Canonical Primer Communications Firebase project.
  *
- * Matches the original `primerdb2` Android client provided in the brief:
- *
- *   project_id: primerdb2
- *   databaseURL: https://primerdb2-default-rtdb.firebaseio.com
- *   storageBucket: primerdb2.firebasestorage.app
- *
- * Each value can be overridden at build time by setting the matching
- * `VITE_FB_*` environment variable (see `.env.example`).  This is
- * useful for pointing the web client at a staging or development
- * database without editing source code.
+ *   project_id      : primerdb2
+ *   databaseURL     : https://primerdb2-default-rtdb.firebaseio.com
+ *   storageBucket   : primerdb2.firebasestorage.app
+ *   messagingSender : 1055563458097
  */
 const DEFAULT_FIREBASE_CONFIG = {
   apiKey: "AIzaSyCBgMvM6xAnoHN_l6PSIclIBkml_vVercY",
@@ -34,7 +29,7 @@ const DEFAULT_FIREBASE_CONFIG = {
   projectId: "primerdb2",
   storageBucket: "primerdb2.firebasestorage.app",
   messagingSenderId: "1055563458097",
-  appId: "1:1055563458097:android:47c55567f67d29f2415710",
+  appId: "1:1055563458097:android:2f7f98808f9eefa7415710",
 } as const;
 
 export const FIREBASE_CONFIG = {
@@ -58,21 +53,12 @@ export const FIREBASE_CONFIG = {
 let _app: FirebaseApp | null = null;
 let _db: Database | null = null;
 let _storage: FirebaseStorage | null = null;
+let _auth: Auth | null = null;
 
-/**
- * Initializes (or returns) the Firebase app.
- *
- * Multiple `initializeApp` calls would throw because the modular SDK
- * uses static config keys; guard with `getApps().length`.
- */
 function ensureApp(): FirebaseApp {
   if (_app) return _app;
   const existing = getApps();
-  if (existing.length > 0) {
-    _app = existing[0];
-  } else {
-    _app = initializeApp(FIREBASE_CONFIG);
-  }
+  _app = existing.length > 0 ? existing[0] : initializeApp(FIREBASE_CONFIG);
   return _app;
 }
 
@@ -90,10 +76,16 @@ export function getBucket(): FirebaseStorage {
   return _storage;
 }
 
+export function getFbAuth(): Auth {
+  if (!_auth) _auth = getAuth(ensureApp());
+  return _auth;
+}
+
 /**
- * Returns true once the Firebase client is initialized.  The current
- * implementation always returns true (the RTDB project config is
- * embedded), so the data layer is always Firebase-backed.
+ * Returns true once the Firebase client is initialized. The default
+ * project config is embedded so this is effectively always true; the
+ * try/catch is here to gracefully fall back to the offline repo if a
+ * caller has overridden the env vars with invalid values.
  */
 export function isFirebaseConfigured(): boolean {
   try {
