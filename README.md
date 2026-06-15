@@ -20,7 +20,7 @@ database are preserved exactly.
 | State            | Custom React context (`src/store.tsx`)                |
 | Data             | Firebase Realtime Database (`primerdb2`)              |
 | Auth (passwords) | `/Users` lookup in RTDB, password compared in-app     |
-| Auth (reset)     | Firebase Authentication email reset link              |
+| Auth (reset)     | Supabase Edge Function OTP (6-digit code)             |
 | Biometrics       | WebAuthn / Passkeys (platform authenticator)          |
 | Mobile           | Capacitor 7 (Android wrapper in `android/`)           |
 
@@ -109,25 +109,21 @@ No field is renamed at the database boundary.
 Looks up the entered email in `/Users` by `Primer_Email`, then compares
 the entered password against the stored `Password` field.
 
-### Forgot password
+### Forgot password (OTP-based)
 
-Uses Firebase Authentication's `sendPasswordResetEmail()`. This is a
-real, secure email-link reset (the same primitive Google and Microsoft
-use for account recovery):
+Uses a Supabase Edge Function (`supabase/functions/password-reset-otp/`)
+for secure 6-digit OTP verification:
 
 1. The user enters their Primer email.
 2. We confirm the email exists in `/Users`.
-3. Firebase emails a one-time, time-limited reset link.
-4. The user resets the password on Firebase's hosted page.
-5. The user signs back in with the new password.
+3. The edge function generates a 6-digit OTP (expires in 10 minutes).
+4. The user enters the OTP to verify identity.
+5. The user creates a new password.
+6. The password is updated in Firebase RTDB `/Users/{id}/Password`.
 
-> **UNKNOWN (documented):** The legacy app stored passwords as plain
-> strings in `/Users/{id}/Password`. After a Firebase Auth reset the
-> RTDB mirror is not automatically synced — the user should also
-> update `Password` via the in-app **Change password** flow so the
-> attendance / coverage / OT screens keep authenticating against the
-> legacy node. An admin script can be added to keep these two in
-> sync if needed.
+> **Note:** The OTP is stored in Supabase (not Firebase) with a 10-minute
+> expiration and 5-attempt limit. In development mode, the OTP is returned
+> in the response for testing convenience.
 
 ### Biometric unlock
 
@@ -143,12 +139,73 @@ Real platform biometrics via WebAuthn (`src/lib/biometric.ts`):
   ceremony and signs the user back in by `Employee_ID_Number`.
 - Cancellation, lockout, and unsupported-hardware are all surfaced
   with explicit error messages.
+- Flextime users are supported — `Work_Setup: "Flextime"` is detected
+  and stored in the profile for appropriate clock-in/out handling.
 
 For the Android Capacitor build the WebView exposes the same
 WebAuthn surface, so no extra plugin is needed. To use a fully
 native ceremony instead, install
 [`@capgo/capacitor-native-biometric`](https://github.com/Cap-go/capacitor-native-biometric)
 and adapt `src/lib/biometric.ts` to delegate to it on Android.
+
+---
+
+## Leave request logic
+
+- **Vacation Leave (VL):** Auto-approved immediately. Credits are deducted
+  with a floor of -12 (allowing up to 12 hours of negative credit).
+- **Sick Leave (SL):** Stays Pending for supervisor approval.
+- **Other leave types:** Pending approval.
+- **Date changes:** Creates "Change Pending" status for re-approval.
+
+---
+
+## Coverage board
+
+Team-based grabbing rules are enforced:
+
+| Team                | Can grab from                       |
+| ------------------- | ----------------------------------- |
+| Delta-Expert        | Delta-Expert only                   |
+| Lima-Delta-Expert   | Lima-Delta-Expert only              |
+| Inbound             | Inbound only                        |
+| Supervisor/Lead     | Any team                            |
+| Other               | Same team only                      |
+
+Additional features:
+- Month and year filters for viewing historical requests
+- Past dates are grayed out and cannot be grabbed
+- "Different team" and "Past date" status messages for unavailable requests
+
+---
+
+## Maintenance mode
+
+The following features are currently disabled with maintenance warnings:
+
+- **OT Request** — overtime and rest-day overtime submissions
+- **Tech Issue Coverage** — technical issue coverage requests
+
+These screens display a maintenance banner and a dialog explaining the
+feature is temporarily unavailable. Users are directed to check back
+later or contact their supervisor.
+
+---
+
+## Infractions
+
+The Infractions page loads all fields from `/InfractionList`:
+
+- `Infraction_ID` — unique identifier
+- `InfractionType` — type of infraction
+- `Lost_Minutes` — minutes lost
+- `InfractionDate` — date of infraction
+- `Days_Off` — scheduled days off
+- `Phone_Name` — device/phone identifier
+- `Schedule` — work schedule
+- `Notes` — additional notes
+- `DriveLink` — clickable attachment link
+- `Month` / `Year` — time period
 
 ---
 
@@ -174,26 +231,25 @@ in place.
 | Dashboard shows blank fields after login            | Confirm `/Users/{Employee_ID_Number}` exists in `primerdb2` |
 | `Account not found.` on sign-in                     | Email must match `Primer_Email` exactly in `/Users`         |
 | Biometric button missing                            | Device has no platform authenticator, or WebAuthn unsupported |
-| Forgot-password link error `user-not-found`         | Email is in `/Users` but not enrolled in Firebase Auth      |
+| OTP not received                                    | Check email spam folder; contact admin for OTP delivery issues |
 | Clock-in toast says "You're already clocked in"     | There is already an open attendance record — clock out first |
+| OT/Tech Issue button shows "Under maintenance"      | Feature is temporarily disabled; contact supervisor        |
+| Coverage "Grab" button disabled                     | Past date, different team, or already your own request      |
 
 If RTDB reads fail entirely, the app falls back to a **read-only**
-in-memory store backed by neutral seed data (no real user info) so the
-UI does not crash — but writes are disabled in that mode.
+in-memory empty state so the UI does not crash — writes are disabled
+in that mode.
 
 ---
 
 ## Known limitations / UNKNOWN
 
-- **Password mirror sync**: see the "Forgot password" note above.
-- **OTP delivery**: the original Android app used a custom HTTP OTP
-  endpoint owned by the company. The web rebuild uses Firebase Auth's
-  email reset link instead because there is no server runtime to host
-  a Resend / Twilio relay. To switch to a 6-digit OTP, add a
-  Cloudflare Worker / Firebase Cloud Function that wraps Resend and
-  point `src/lib/forgot-password.ts` at it.
-- **Calendar rules**: holiday + day-off blocking are enforced per
+- **Password mirror sync**: Password resets update `/Users/{id}/Password`
+  directly. Legacy Android apps may cache credentials separately.
+- **Calendar rules**: Holiday + day-off blocking are enforced per
   screen. A future refactor should centralize them under
   `src/lib/calendar.ts` (helper file present in the original).
-- **Profile photo upload**: works through the existing Profile screen
+- **Profile photo upload**: Works through the existing Profile screen
   but compression / size limits are not yet enforced.
+- **Push notifications**: Web push not implemented; relies on in-app
+  notification center only.

@@ -43,6 +43,9 @@ export function Clock() {
             <span className={`h-2 w-2 rounded-full ${profile.isClockedIn ? "bg-emerald-400" : "bg-rose-400"} animate-pulse`} />
             {profile.isClockedIn ? "Currently Clocked In" : "Currently Clocked Out"}
           </div>
+          {profile.isFlextime && (
+            <Badge tone="indigo" className="mt-3">Flextime Schedule</Badge>
+          )}
         </Card>
 
         {/* Server-time safety banner */}

@@ -49,6 +49,7 @@ export const seedProfile: Profile = {
   pagIbig: "1234-5678-9012",
   workSetup: "Hybrid",
   isClockedIn: false,
+  isFlextime: false,
 };
 
 export const seedHolidays: Holiday[] = [

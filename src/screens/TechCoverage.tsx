@@ -2,11 +2,16 @@ import { useState } from "react";
 import { useApp } from "../store";
 import { AppBar } from "../components/AppBar";
 import { Card, Button, Dialog, TextArea, TextField } from "../components/ui";
+import { Icon } from "../components/Icon";
 import { Calendar } from "../components/Calendar";
 import { startOfDay, serverNow, parseDate, monthName } from "../lib/date";
 
+// Maintenance mode - Tech Issue requests are currently disabled
+const MAINTENANCE_MODE = true;
+
 export function TechCoverage() {
   const { profile, submitTechCoverage, back, toast } = useApp();
+  const [showMaintenance, setShowMaintenance] = useState(true);
   const [date, setDate] = useState<string[]>([]);
   const [fromT, setFromT] = useState("13:00");
   const [toT, setToT] = useState("15:00");
@@ -19,7 +24,20 @@ export function TechCoverage() {
 
   const canReview = date.length > 0 && reason.trim().length > 0 && hours > 0;
 
+  const openReview = () => {
+    if (MAINTENANCE_MODE) {
+      setShowMaintenance(true);
+      return;
+    }
+    if (!canReview) {
+      toast("Complete all fields.", "error");
+      return;
+    }
+    setReview(true);
+  };
+
   const confirm = () => {
+    if (MAINTENANCE_MODE) return;
     const d = date[0];
     submitTechCoverage({
       employeeId: profile.employeeId,
@@ -46,6 +64,19 @@ export function TechCoverage() {
     <div className="flex h-full flex-col">
       <AppBar title="Tech Issue Coverage" subtitle="Report hours lost" />
       <div className="flex-1 space-y-4 overflow-y-auto px-4 pb-6 pt-4">
+        {/* Maintenance banner */}
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-500/20 dark:bg-amber-500/10">
+          <div className="flex items-center gap-2">
+            <Icon name="alert" size={18} className="text-amber-600 dark:text-amber-400" />
+            <p className="text-sm font-semibold text-amber-700 dark:text-amber-300">
+              This feature is currently under maintenance
+            </p>
+          </div>
+          <p className="mt-1 text-xs text-amber-600/80 dark:text-amber-400/80">
+            Tech issue coverage requests cannot be submitted at this time. Please check back later.
+          </p>
+        </div>
+
         <p className="text-xs font-bold uppercase text-slate-400">Issue date</p>
         <Calendar selected={date} onToggle={(d) => setDate([d])} disabledReason={disabledReason} single />
 
@@ -69,10 +100,29 @@ export function TechCoverage() {
 
         <TextArea label="Reason" rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Describe the technical issue…" />
 
-        <Button full disabled={!canReview} onClick={() => canReview ? setReview(true) : toast("Complete all fields.", "error")} icon="check">
+        <Button full disabled={!canReview} onClick={openReview} icon="check">
           Review request
         </Button>
       </div>
+
+      {/* Maintenance mode dialog */}
+      <Dialog
+        open={showMaintenance}
+        onClose={() => setShowMaintenance(false)}
+        title="Feature Unavailable"
+      >
+        <div className="flex flex-col items-center gap-3 py-4 text-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-100 dark:bg-amber-500/15">
+            <Icon name="alert" size={28} className="text-amber-600 dark:text-amber-400" />
+          </div>
+          <div>
+            <p className="font-bold text-slate-800 dark:text-slate-100">Tech issue coverage is under maintenance</p>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              This feature is temporarily disabled. Please check back later or contact your supervisor.
+            </p>
+          </div>
+        </div>
+      </Dialog>
 
       <Dialog
         open={review}

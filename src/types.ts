@@ -60,6 +60,8 @@ export interface Profile {
   pagIbig: string;
   workSetup: string;
   isClockedIn: boolean;
+  /** 'Flextime' users have different clock rules */
+  isFlextime: boolean;
 }
 
 export interface AttendanceRecord {
@@ -152,10 +154,17 @@ export interface CoverageRequest {
 export interface Infraction {
   id: string;
   employeeId: string;
+  infractionId?: string;
   infractionType: string;
   lostMinutes: number;
   notes: string;
   infractionDate: string; // M/d/yyyy
+  daysOff?: string;
+  phoneName?: string;
+  schedule?: string;
+  driveLink?: string;
+  month?: string;
+  year?: number;
 }
 
 export interface Holiday {

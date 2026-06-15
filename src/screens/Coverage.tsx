@@ -4,17 +4,49 @@ import { AppBar } from "../components/AppBar";
 import { Card, Button, Badge, EmptyState, Dialog } from "../components/ui";
 import { Icon } from "../components/Icon";
 import { StatusBadge } from "./Dashboard";
-import { MONTHS } from "../lib/date";
+import { MONTHS, serverNow, parseDate, startOfDay } from "../lib/date";
 import type { CoverageRequest, CoverageStatus } from "../types";
 
 const STATUSES: (CoverageStatus | "All")[] = [
   "All", "Available", "Ongoing", "For Approval", "Completed", "Disapproved",
 ];
 
+const YEARS = ["All", "2024", "2025", "2026"];
+
+// Team-based grab rules
+function canGrabCoverage(profileTeam: string, requesterTeam: string): boolean {
+  const team = profileTeam.toLowerCase();
+  const reqTeam = requesterTeam.toLowerCase();
+
+  // Delta-Expert can grab from Delta-Expert team only
+  if (team.includes("delta-expert") || team.includes("delta expert")) {
+    return reqTeam.toLowerCase().includes("delta");
+  }
+
+  // Lima-Delta-Expert can grab from Lima-Delta-Expert team only
+  if (team.includes("lima-delta-expert") || team.includes("lima delta expert")) {
+    return reqTeam.toLowerCase().includes("lima");
+  }
+
+  // Inbound can grab from Inbound team only
+  if (team.includes("inbound")) {
+    return reqTeam.toLowerCase().includes("inbound");
+  }
+
+  // Supervisor can grab any
+  if (team.includes("supervisor") || team.includes("sup") || team.includes("lead")) {
+    return true;
+  }
+
+  // Default: allow same team only
+  return team === reqTeam;
+}
+
 export function Coverage() {
   const { coverage, profile, takeoverCoverage, cancelCoverage, navigate } = useApp();
   const [tab, setTab] = useState<"available" | "taken">("available");
   const [month, setMonth] = useState("All");
+  const [year, setYear] = useState("All");
   const [status, setStatus] = useState<CoverageStatus | "All">("All");
   const [confirm, setConfirm] = useState<{ kind: "take" | "cancel"; req: CoverageRequest } | null>(null);
 
@@ -22,10 +54,11 @@ export function Coverage() {
     return coverage.filter((c) => {
       const inTab = tab === "available" ? c.coverageStatus === "Available" : c.coverageStatus !== "Available";
       const inMonth = month === "All" || c.month === month;
+      const inYear = year === "All" || String(c.year) === year;
       const inStatus = status === "All" || c.coverageStatus === status;
-      return inTab && inMonth && inStatus;
+      return inTab && inMonth && inYear && inStatus;
     });
-  }, [coverage, tab, month, status]);
+  }, [coverage, tab, month, year, status]);
 
   return (
     <div className="flex h-full flex-col">
@@ -64,6 +97,10 @@ export function Coverage() {
             <option value="All">All months</option>
             {MONTHS.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
+          <select value={year} onChange={(e) => setYear(e.target.value)}
+            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-white/15 dark:bg-slate-900/50 dark:text-white">
+            {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
           <select value={status} onChange={(e) => setStatus(e.target.value as CoverageStatus | "All")}
             className="flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-white/15 dark:bg-slate-900/50 dark:text-white">
             {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -77,8 +114,12 @@ export function Coverage() {
             {filtered.map((c) => {
               const isOwn = c.requesterId === profile.employeeId;
               const isMine = c.coveredById === profile.employeeId;
+              const isPastDate = parseDate(c.coverageDate) < startOfDay(serverNow());
+              const canGrab = canGrabCoverage(profile.team, c.team || "");
+              const showGrab = !isOwn && canGrab && !isPastDate;
+
               return (
-                <Card key={c.id}>
+                <Card key={c.id} className={isPastDate ? "opacity-60" : ""}>
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-2">
                       <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300">
@@ -93,7 +134,7 @@ export function Coverage() {
                   </div>
 
                   <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-                    <Meta label="Date" value={c.coverageDate} />
+                    <Meta label="Date" value={c.coverageDate} isPast={isPastDate} />
                     <Meta label="Time" value={c.coverageTime} />
                     <Meta label="Hours" value={`${c.forCoverageHours}h`} />
                   </div>
@@ -103,6 +144,7 @@ export function Coverage() {
                   <div className="mt-1.5 flex items-center gap-2">
                     <Badge>{c.coverageType}</Badge>
                     {c.takenBy && <Badge tone="sky">Taken by {c.takenBy}</Badge>}
+                    {isPastDate && <Badge tone="slate">Past</Badge>}
                   </div>
 
                   {/* Actions */}
@@ -111,6 +153,14 @@ export function Coverage() {
                       isOwn ? (
                         <span className="flex-1 rounded-xl bg-slate-100 py-2 text-center text-xs font-semibold text-slate-400 dark:bg-white/5">
                           Your own request
+                        </span>
+                      ) : isPastDate ? (
+                        <span className="flex-1 rounded-xl bg-slate-100 py-2 text-center text-xs font-semibold text-slate-400 dark:bg-white/5">
+                          Past date
+                        </span>
+                      ) : !canGrab ? (
+                        <span className="flex-1 rounded-xl bg-slate-100 py-2 text-center text-xs font-semibold text-slate-400 dark:bg-white/5">
+                          Different team
                         </span>
                       ) : (
                         <Button full variant="tonal" icon="swap" onClick={() => setConfirm({ kind: "take", req: c })}>
@@ -163,11 +213,11 @@ export function Coverage() {
   );
 }
 
-function Meta({ label, value }: { label: string; value: string }) {
+function Meta({ label, value, isPast }: { label: string; value: string; isPast?: boolean }) {
   return (
-    <div className="rounded-lg border border-slate-200 px-2 py-1.5 dark:border-white/10">
+    <div className={`rounded-lg border px-2 py-1.5 dark:border-white/10 ${isPast ? "border-slate-300 bg-slate-50 dark:bg-white/5" : "border-slate-200"}`}>
       <p className="text-[10px] uppercase text-slate-400">{label}</p>
-      <p className="font-semibold text-slate-700 dark:text-slate-200">{value}</p>
+      <p className={`font-semibold ${isPast ? "text-slate-400" : "text-slate-700 dark:text-slate-200"}`}>{value}</p>
     </div>
   );
 }

@@ -9,12 +9,13 @@ import {
   isBiometricAvailable,
   verifyBiometric,
 } from "../lib/biometric";
-import { requestPasswordReset } from "../lib/forgot-password";
+import { requestPasswordReset, verifyOTP, resetPassword } from "../lib/forgot-password";
+
+type ForgotStep = "email" | "otp" | "reset" | "done";
 
 export function Login() {
   const { signIn, signInWithEmployeeId, toast } = useApp();
-  // No more dummy pre-fill — the previous "alex.rivera@primer.com" seed
-  // was the source of the dummy-data bug.
+  // Intentionally empty - no dummy prefill
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
@@ -28,12 +29,17 @@ export function Login() {
   const [bioEnrolled, setBioEnrolled] = useState(false);
   const [bioEmail, setBioEmail] = useState<string | null>(null);
 
-  // Forgot-password dialog
+  // Forgot-password OTP flow
   const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotStep, setForgotStep] = useState<ForgotStep>("email");
   const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotOtp, setForgotOtp] = useState("");
+  const [forgotNewPassword, setForgotNewPassword] = useState("");
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState("");
   const [forgotSending, setForgotSending] = useState(false);
   const [forgotError, setForgotError] = useState("");
-  const [forgotSent, setForgotSent] = useState(false);
+  const [forgotVerifyToken, setForgotVerifyToken] = useState<string | null>(null);
+  const [forgotDevOtp, setForgotDevOtp] = useState<string | null>(null);
 
   // Enrollment prompt after first successful sign-in on a device
   // that supports biometrics.
@@ -141,15 +147,87 @@ export function Login() {
     setPendingProfile(null);
   };
 
-  const handleForgot = async () => {
+  const openForgotDialog = () => {
+    setForgotEmail(email);
+    setForgotStep("email");
+    setForgotOtp("");
+    setForgotNewPassword("");
+    setForgotConfirmPassword("");
+    setForgotError("");
+    setForgotVerifyToken(null);
+    setForgotDevOtp(null);
+    setForgotOpen(true);
+  };
+
+  const closeForgotDialog = () => {
+    setForgotOpen(false);
+    setForgotStep("email");
+    setForgotError("");
+  };
+
+  const handleRequestOtp = async () => {
     setForgotError("");
     setForgotSending(true);
     try {
       const result = await requestPasswordReset(forgotEmail || email);
       if (result.ok) {
-        setForgotSent(true);
+        setForgotStep("otp");
+        setForgotVerifyToken(result.verifyToken ?? null);
+        setForgotDevOtp(result.devOtp ?? null);
       } else {
-        setForgotError(result.error ?? "Could not send reset email.");
+        setForgotError(result.error ?? "Could not send OTP.");
+      }
+    } finally {
+      setForgotSending(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    setForgotError("");
+    if (!forgotOtp || forgotOtp.length !== 6 || !/^\d{6}$/.test(forgotOtp)) {
+      setForgotError("Enter the 6-digit code sent to your email.");
+      return;
+    }
+    setForgotSending(true);
+    try {
+      const result = await verifyOTP(forgotEmail || email, forgotOtp);
+      if (result.ok) {
+        setForgotVerifyToken(result.verifyToken ?? null);
+        setForgotStep("reset");
+      } else {
+        setForgotError(result.error ?? "Invalid OTP.");
+      }
+    } finally {
+      setForgotSending(false);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    setForgotError("");
+    if (!forgotNewPassword || forgotNewPassword.length < 6) {
+      setForgotError("Password must be at least 6 characters.");
+      return;
+    }
+    if (forgotNewPassword !== forgotConfirmPassword) {
+      setForgotError("Passwords do not match.");
+      return;
+    }
+    if (!forgotVerifyToken) {
+      setForgotError("Verification expired. Please start over.");
+      return;
+    }
+    setForgotSending(true);
+    try {
+      const result = await resetPassword(
+        forgotEmail || email,
+        forgotNewPassword,
+        forgotVerifyToken,
+      );
+      if (result.ok) {
+        setForgotStep("done");
+        toast("Password reset successful.", "success");
+      } else {
+        setForgotError(result.error ?? "Failed to reset password.");
       }
     } finally {
       setForgotSending(false);
@@ -188,7 +266,7 @@ export function Login() {
               type={show ? "text" : "password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
+              placeholder="Enter your password"
               autoComplete="current-password"
               className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 pr-11 text-sm text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-white/15 dark:bg-slate-900/50 dark:text-white"
             />
@@ -215,12 +293,7 @@ export function Login() {
           </label>
           <button
             type="button"
-            onClick={() => {
-              setForgotEmail(email);
-              setForgotSent(false);
-              setForgotError("");
-              setForgotOpen(true);
-            }}
+            onClick={openForgotDialog}
             className="text-sm font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
           >
             Forgot password?
@@ -236,7 +309,7 @@ export function Login() {
 
         <Button full onClick={submit} disabled={loading}>
           {loading ? <Spinner size={18} /> : <Icon name="lock" size={18} />}
-          {loading ? "Verifying…" : "Sign in"}
+          {loading ? "Verifying..." : "Sign in"}
         </Button>
 
         {bioSupported && bioEnrolled && (
@@ -248,7 +321,7 @@ export function Login() {
           >
             <Icon name="fingerprint" size={18} />
             {biometric
-              ? "Authenticating…"
+              ? "Authenticating..."
               : bioEmail
                 ? `Unlock as ${bioEmail}`
                 : "Unlock with biometrics"}
@@ -272,61 +345,135 @@ export function Login() {
         </p>
         <p className="mt-1">
           Accounts are stored in the Primer Realtime Database. Biometric unlock
-          uses your device&rsquo;s platform authenticator (Face ID, fingerprint,
+          uses your device&apos;s platform authenticator (Face ID, fingerprint,
           Windows Hello, etc.).
         </p>
       </div>
 
-      {/* Forgot password dialog */}
+      {/* Forgot password OTP dialog */}
       <Dialog
         open={forgotOpen}
-        onClose={() => setForgotOpen(false)}
-        title="Reset your password"
+        onClose={closeForgotDialog}
+        title={
+          forgotStep === "email"
+            ? "Reset your password"
+            : forgotStep === "otp"
+              ? "Enter verification code"
+              : forgotStep === "reset"
+                ? "Create new password"
+                : "Password reset"
+        }
         footer={
-          forgotSent ? (
-            <Button full onClick={() => setForgotOpen(false)}>
+          forgotStep === "done" ? (
+            <Button full onClick={closeForgotDialog}>
               Done
             </Button>
-          ) : (
-            <Button full onClick={handleForgot} disabled={forgotSending}>
+          ) : forgotStep === "email" ? (
+            <Button full onClick={handleRequestOtp} disabled={forgotSending}>
               {forgotSending ? <Spinner size={18} /> : <Icon name="lock" size={18} />}
-              {forgotSending ? "Sending…" : "Send reset link"}
+              {forgotSending ? "Sending..." : "Send verification code"}
             </Button>
-          )
+          ) : forgotStep === "otp" ? (
+            <Button full onClick={handleVerifyOtp} disabled={forgotSending}>
+              {forgotSending ? <Spinner size={18} /> : <Icon name="check" size={18} />}
+              {forgotSending ? "Verifying..." : "Verify code"}
+            </Button>
+          ) : forgotStep === "reset" ? (
+            <Button full onClick={handleResetPassword} disabled={forgotSending}>
+              {forgotSending ? <Spinner size={18} /> : <Icon name="check" size={18} />}
+              {forgotSending ? "Resetting..." : "Reset password"}
+            </Button>
+          ) : null
         }
       >
-        {forgotSent ? (
-          <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-            <p>
-              A secure password reset link has been emailed to{" "}
-              <span className="font-semibold">{forgotEmail || email}</span>.
-            </p>
-            <p>
-              Open the email on this device, follow the link, choose a new
-              password, then sign in.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <p className="text-sm text-slate-600 dark:text-slate-300">
-              Enter the email on file for your Primer account. We&rsquo;ll send
-              a secure reset link that expires after a short time.
-            </p>
-            <TextField
-              label="Primer email"
-              type="email"
-              value={forgotEmail}
-              onChange={(e) => setForgotEmail(e.target.value)}
-              placeholder="you@primer.com"
-            />
-            {forgotError && (
-              <div className="flex items-start gap-2 rounded-xl bg-rose-50 px-3 py-2.5 text-sm text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">
-                <Icon name="alert" size={16} className="mt-0.5 shrink-0" />
-                <span>{forgotError}</span>
-              </div>
-            )}
-          </div>
-        )}
+        <div className="space-y-3">
+          {forgotStep === "email" && (
+            <>
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                Enter your Primer email address. We&apos;ll send a 6-digit verification
+                code that expires in 10 minutes.
+              </p>
+              <TextField
+                label="Primer email"
+                type="email"
+                value={forgotEmail}
+                onChange={(e) => setForgotEmail(e.target.value)}
+                placeholder="you@primer.com"
+              />
+            </>
+          )}
+
+          {forgotStep === "otp" && (
+            <>
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                We sent a 6-digit code to <span className="font-semibold">{forgotEmail || email}</span>.
+                Enter it below to verify your identity.
+              </p>
+              {forgotDevOtp && (
+                <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
+                  <strong>Dev mode:</strong> Your code is <code className="font-mono font-bold">{forgotDevOtp}</code>
+                </p>
+              )}
+              <TextField
+                label="Verification code"
+                type="text"
+                maxLength={6}
+                value={forgotOtp}
+                onChange={(e) => setForgotOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                placeholder="123456"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setForgotStep("email");
+                  setForgotOtp("");
+                  setForgotError("");
+                }}
+                className="text-xs font-semibold text-indigo-600 dark:text-indigo-400"
+              >
+                Didn&apos;t receive it? Send again
+              </button>
+            </>
+          )}
+
+          {forgotStep === "reset" && (
+            <>
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                Identity verified. Create a new password for your account.
+              </p>
+              <TextField
+                label="New password"
+                type="password"
+                value={forgotNewPassword}
+                onChange={(e) => setForgotNewPassword(e.target.value)}
+                placeholder="At least 6 characters"
+              />
+              <TextField
+                label="Confirm new password"
+                type="password"
+                value={forgotConfirmPassword}
+                onChange={(e) => setForgotConfirmPassword(e.target.value)}
+                placeholder="Enter again to confirm"
+              />
+            </>
+          )}
+
+          {forgotStep === "done" && (
+            <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+              <p>
+                Your password has been reset successfully. You can now sign in
+                with your new password.
+              </p>
+            </div>
+          )}
+
+          {forgotError && (
+            <div className="flex items-start gap-2 rounded-xl bg-rose-50 px-3 py-2.5 text-sm text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">
+              <Icon name="alert" size={16} className="mt-0.5 shrink-0" />
+              <span>{forgotError}</span>
+            </div>
+          )}
+        </div>
       </Dialog>
 
       {/* Biometric enrollment prompt */}
@@ -356,7 +503,7 @@ export function Login() {
         }
       >
         <p className="text-sm text-slate-600 dark:text-slate-300">
-          Use your device&rsquo;s fingerprint, face, or PIN to sign in faster
+          Use your device&apos;s fingerprint, face, or PIN to sign in faster
           next time. You can disable this later in your profile.
         </p>
       </Dialog>

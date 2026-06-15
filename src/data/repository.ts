@@ -381,10 +381,17 @@ interface FbCoverageRecord {
 
 interface FbInfractionRecord {
   InfractionType?: string;
+  InfractionID?: string;
   Lostminutes?: number | string;
   Notes?: string;
   InfractionDate?: string;
   Employee_ID_Number?: string;
+  Days_Off?: string;
+  Phone_Name?: string;
+  Schedule?: string;
+  driveLink?: string;
+  month?: string;
+  year?: number;
 }
 
 interface FbHolidayRecord {
@@ -753,6 +760,8 @@ export class FirebaseRepository implements Repository {
 // ---------------------------------------------------------------------------
 
 function mapUserToProfile(id: string, rec: FbUserRecord): Profile {
+  const workSetup = asString(rec.Work_Setup);
+  const isFlextime = workSetup.toLowerCase() === "flextime" || asBoolean((rec as unknown as { isFlextime?: boolean }).isFlextime, false);
   return {
     id,
     employeeId: rec.Employee_ID_Number ?? rec.EmployeeId ?? id,
@@ -785,8 +794,9 @@ function mapUserToProfile(id: string, rec: FbUserRecord): Profile {
     sss: asString(rec.SSS),
     tin: asString(rec.TIN),
     pagIbig: asString(rec.Pag_Ibig),
-    workSetup: asString(rec.Work_Setup),
+    workSetup,
     isClockedIn: asBoolean(rec.isClockedIn),
+    isFlextime,
   };
 }
 
@@ -1033,10 +1043,17 @@ function mapInfraction(id: string, rec: FbInfractionRecord): Infraction {
   return {
     id,
     employeeId: asString(rec.Employee_ID_Number),
+    infractionId: asString(rec.InfractionID),
     infractionType: asString(rec.InfractionType),
     lostMinutes: asNumber(rec.Lostminutes),
     notes: asString(rec.Notes),
     infractionDate: asString(rec.InfractionDate),
+    daysOff: asString(rec.Days_Off),
+    phoneName: asString(rec.Phone_Name),
+    schedule: asString(rec.Schedule),
+    driveLink: asString(rec.driveLink),
+    month: asString(rec.month),
+    year: rec.year !== undefined ? asNumber(rec.year) : undefined,
   };
 }
 

@@ -7,7 +7,6 @@ import { tenureFrom } from "../lib/date";
 export function Dashboard() {
   const { profile, leaves, ot, infractions, navigate, notifications } = useApp();
   const [reqOpen, setReqOpen] = useState(false);
-  const [showFullEmail, setShowFullEmail] = useState(false);
   const unread = notifications.filter((n) => !n.readAt).length;
   const userInfractions = infractions.filter((i) => i.employeeId === profile.employeeId);
   const infractionCount = userInfractions.length;
@@ -35,7 +34,7 @@ export function Dashboard() {
 
   return (
     <div className="space-y-4 px-4 pb-6 pt-4">
-      {/* Greeting header */}
+      {/* Greeting header - email removed as it appears elsewhere in profile */}
       <div className="flex items-center gap-3">
         <Avatar url={profile.profileImageUrl} name={profile.fullName} size={52} />
         <div className="min-w-0 flex-1">
@@ -44,15 +43,7 @@ export function Dashboard() {
             {profile.fullName}
           </h1>
           <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-            {profile.position} ·{" "}
-            <span
-              className="cursor-pointer underline decoration-dotted hover:decoration-solid"
-              onClick={() => setShowFullEmail(true)}
-            >
-              {profile.primerEmail.length > 28
-                ? profile.primerEmail.slice(0, 25) + "..."
-                : profile.primerEmail}
-            </span>
+            {profile.position}
           </p>
         </div>
         <button
@@ -160,23 +151,7 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* Full email dialog */}
-      <Dialog
-        open={showFullEmail}
-        onClose={() => setShowFullEmail(false)}
-        title="Email address"
-        footer={
-          <Button full onClick={() => setShowFullEmail(false)}>
-            Close
-          </Button>
-        }
-      >
-        <p className="text-center font-mono text-sm break-all text-slate-700 dark:text-slate-200">
-          {profile.primerEmail}
-        </p>
-      </Dialog>
-
-      {/* Request type chooser */}
+      {/* Request type chooser with maintenance mode for OT and Tech Issue */}
       <Dialog
         open={reqOpen}
         onClose={() => setReqOpen(false)}
@@ -193,13 +168,17 @@ export function Dashboard() {
             icon="bolt"
             title="OT request"
             desc="Overtime or rest-day overtime"
-            onClick={() => { setReqOpen(false); navigate("ot"); }}
+            disabled
+            disabledReason="Under maintenance"
+            onClick={() => {}}
           />
           <RequestOption
             icon="wrench"
             title="Tech issue coverage"
             desc="Report hours lost to technical issues"
-            onClick={() => { setReqOpen(false); navigate("tech"); }}
+            disabled
+            disabledReason="Under maintenance"
+            onClick={() => {}}
           />
         </div>
       </Dialog>
@@ -240,20 +219,32 @@ function QuickAction({ icon, label, onClick, badge }: { icon: IconName; label: s
   );
 }
 
-function RequestOption({ icon, title, desc, onClick }: { icon: IconName; title: string; desc: string; onClick: () => void }) {
+function RequestOption({ icon, title, desc, onClick, disabled, disabledReason }: { icon: IconName; title: string; desc: string; onClick: () => void; disabled?: boolean; disabledReason?: string }) {
   return (
     <button
-      onClick={onClick}
-      className="flex w-full items-center gap-3 rounded-xl border border-slate-200 p-3 text-left transition hover:border-indigo-300 hover:bg-indigo-50/50 dark:border-white/10 dark:hover:bg-white/5"
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition ${
+        disabled
+          ? "cursor-not-allowed border-slate-200 bg-slate-50 opacity-60 dark:border-white/5 dark:bg-slate-800/30"
+          : "border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/50 dark:border-white/10 dark:hover:bg-white/5"
+      }`}
     >
-      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300">
+      <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${
+        disabled
+          ? "bg-slate-100 text-slate-400 dark:bg-slate-700 dark:text-slate-500"
+          : "bg-indigo-100 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300"
+      }`}>
         <Icon name={icon} size={20} />
       </div>
       <div className="flex-1">
-        <p className="text-sm font-bold text-slate-800 dark:text-slate-100">{title}</p>
+        <p className={`text-sm font-bold ${disabled ? "text-slate-400 dark:text-slate-500" : "text-slate-800 dark:text-slate-100"}`}>{title}</p>
         <p className="text-xs text-slate-400">{desc}</p>
+        {disabled && disabledReason && (
+          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{disabledReason}</p>
+        )}
       </div>
-      <Icon name="chevron" size={18} className="text-slate-300" />
+      {!disabled && <Icon name="chevron" size={18} className="text-slate-300" />}
     </button>
   );
 }

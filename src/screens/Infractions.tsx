@@ -1,6 +1,6 @@
 import { useApp } from "../store";
 import { AppBar } from "../components/AppBar";
-import { Card, Badge, EmptyState } from "../components/ui";
+import { Card, Badge, EmptyState, Field } from "../components/ui";
 import { Icon } from "../components/Icon";
 
 export function Infractions() {
@@ -38,7 +38,35 @@ export function Infractions() {
                 </div>
                 <Badge tone="rose">{i.lostMinutes} min</Badge>
               </div>
-              {i.notes && <p className="mt-2 rounded-lg bg-slate-50 p-2 text-sm text-slate-500 dark:bg-white/5 dark:text-slate-300">{i.notes}</p>}
+
+              {/* Show all relevant fields from InfractionList */}
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                {i.infractionId && <Field label="Infraction ID" value={i.infractionId} />}
+                {i.daysOff && <Field label="Days Off" value={i.daysOff} />}
+                {i.phoneName && <Field label="Phone Name" value={i.phoneName} />}
+                {i.schedule && <Field label="Schedule" value={i.schedule} />}
+                {i.month && <Field label="Month" value={i.month} />}
+                {i.year !== undefined && <Field label="Year" value={String(i.year)} />}
+              </div>
+
+              {i.notes && (
+                <div className="mt-2 rounded-lg bg-slate-50 p-2 text-sm text-slate-500 dark:bg-white/5 dark:text-slate-300">
+                  <p className="text-[10px] font-semibold uppercase text-slate-400">Notes</p>
+                  <p className="mt-1">{i.notes}</p>
+                </div>
+              )}
+
+              {i.driveLink && (
+                <a
+                  href={i.driveLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-indigo-500/25"
+                >
+                  <Icon name="download" size={14} />
+                  View attachment
+                </a>
+              )}
             </Card>
           ))
         )}

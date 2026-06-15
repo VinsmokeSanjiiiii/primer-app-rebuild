@@ -18,17 +18,7 @@ import type {
   AppNotification,
   ScreenId,
 } from "./types";
-import {
-  seedProfile,
-  seedAttendance,
-  seedLeaves,
-  seedOt,
-  seedCoverage,
-  seedInfractions,
-  seedHolidays,
-  seedNotifications,
-  newId,
-} from "./data/seed";
+import { newId } from "./data/seed";
 import { getRepository } from "./data/repository";
 import {
   fmtDate,
@@ -44,6 +34,43 @@ import {
 // ---------------------------------------------------------------------------
 const SESSION_KEY = "primer_portal_session";
 const THEME_KEY = "primer_portal_theme";
+
+// ---------------------------------------------------------------------------
+// Default empty profile for unauthenticated state
+// ---------------------------------------------------------------------------
+const EMPTY_PROFILE: Profile = {
+  id: "",
+  employeeId: "",
+  primerEmail: "",
+  fullName: "",
+  passwordlessAuthEnabled: false,
+  role: "",
+  position: "",
+  team: "",
+  schedule: "",
+  daysOff: "",
+  status: "",
+  dateStarted: "",
+  tenure: "",
+  address: "",
+  contactNumber: "",
+  personalEmail: "",
+  birthDate: "",
+  department: "",
+  phoneName: "",
+  vlCredits: 0,
+  slCredits: 0,
+  blCredit: 0,
+  slConversionCredits: 0,
+  notes: "",
+  philhealth: "",
+  sss: "",
+  tin: "",
+  pagIbig: "",
+  workSetup: "",
+  isClockedIn: false,
+  isFlextime: false,
+};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -168,14 +195,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [stack, setStack] = useState<ScreenId[]>([]);
 
   // ---- data ----
-  const [profile, setProfile] = useState<Profile>(seedProfile);
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>(seedAttendance);
-  const [leaves, setLeaves] = useState<LeaveRequest[]>(seedLeaves);
-  const [ot, setOt] = useState<OtRequest[]>(seedOt);
-  const [coverage, setCoverage] = useState<CoverageRequest[]>(seedCoverage);
-  const [infractions] = useState<Infraction[]>(seedInfractions);
-  const [holidays] = useState<Holiday[]>(seedHolidays);
-  const [notifications, setNotifications] = useState<AppNotification[]>(seedNotifications);
+  // Start with empty data - will be hydrated from database
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
+  const [ot, setOt] = useState<OtRequest[]>([]);
+  const [coverage, setCoverage] = useState<CoverageRequest[]>([]);
+  const [infractions, setInfractions] = useState<Infraction[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
   // ---- toasts ----
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -200,12 +228,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // atomically so the dashboard only renders once the data is real.
   const hydrateAll = useCallback(
     async (empId: string) => {
-      const [p, a, l, o, c, notifs] = await Promise.all([
+      const [p, a, l, o, c, i, h, notifs] = await Promise.all([
         repo.getProfile(empId).catch(() => null),
         repo.getAttendance(empId).catch(() => []),
         repo.getLeaves(empId).catch(() => []),
         repo.getOtRequests(empId).catch(() => []),
         repo.getCoverage().catch(() => []),
+        repo.getInfractions(empId).catch(() => []),
+        repo.getHolidays().catch(() => []),
         repo.getNotifications(empId).catch(() => []),
       ]);
       if (p) setProfile(p);
@@ -213,6 +243,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLeaves(l);
       setOt(o);
       setCoverage(c);
+      setInfractions(i);
+      setHolidays(h);
       setNotifications(notifs);
       return p;
     },
@@ -343,38 +375,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const offset = await repo.getServerTimeOffsetMs();
         if (typeof offset === "number") setServerTimeOffsetMs(offset);
 
-        // Use the signed-in employee id when available, falling back
-        // to the seed profile's id for the first paint.
+        // Check if there's a session from a previous login
         const sessionEmp = (await repo.getSession())?.employeeId;
-        const empId = sessionEmp ?? seedProfile.employeeId;
-
-        const [p, a, l, o, c, notifs] = await Promise.all([
-          repo.getProfile(empId),
-          repo.getAttendance(empId),
-          repo.getLeaves(empId),
-          repo.getOtRequests(empId),
-          repo.getCoverage(),
-          repo.getNotifications(empId),
-        ]);
-        if (p) setProfile(p);
-        if (a.length) setAttendance(a);
-        if (l.length) setLeaves(l);
-        if (o.length) setOt(o);
-        if (c.length) setCoverage(c);
-        if (notifs.length) setNotifications(notifs);
+        if (sessionEmp) {
+          // Hydrate all data for the logged-in user
+          await hydrateAll(sessionEmp);
+        }
+        // If no session, keep empty state - user needs to log in
         setHasHydrated(true);
       } catch {
-        // Falls back to seed data — no crash.
+        // If hydration fails, still mark as hydrated but keep empty state
         setHasHydrated(true);
       }
     })();
-  }, [repo, hasHydrated]);
+  }, [repo, hasHydrated, hydrateAll]);
 
   // ---- mutations ----
   const clockIn = useCallback(() => {
-    // Guard against duplicate open attendance records — if there is
-    // already an open clock-in, surface a toast instead of stacking
-    // another row on top.
+    if (!profile) {
+      toast("Please sign in first.", "error");
+      return;
+    }
+    // Guard against duplicate open attendance records
     let alreadyOpen = false;
     setAttendance((prev) => {
       alreadyOpen = prev.some((r) => r.isClockedIn);
@@ -389,7 +411,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         note: "",
         noteLocked: false,
         minsLate: 0,
-        recordType: "Regular",
+        recordType: profile.isFlextime ? "Flextime" : "Regular",
         status: "Open",
         isClockedIn: true,
         month: monthName(now),
@@ -403,15 +425,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
     setProfile((p) => {
+      if (!p) return p;
       const next = { ...p, isClockedIn: true };
       persistProfile(next);
       return next;
     });
     toast("Clocked in. Reminders scheduled for your shift.", "success");
-  }, [profile.employeeId, toast, repo, persistProfile]);
+  }, [profile, toast, repo, persistProfile]);
 
 
   const clockOut = useCallback(() => {
+    if (!profile) return;
     const now = serverNow();
     setAttendance((prev) => {
       const idx = prev.findIndex((r) => r.isClockedIn);
@@ -435,12 +459,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return copy;
     });
     setProfile((p) => {
+      if (!p) return p;
       const next = { ...p, isClockedIn: false };
       persistProfile(next);
       return next;
     });
     toast("Clocked out. Total hours saved.", "success");
-  }, [toast, repo, persistProfile]);
+  }, [profile, toast, repo, persistProfile]);
 
   const updateNote = useCallback(
     (id: string, note: string) => {
@@ -458,27 +483,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const submitLeave = useCallback<AppState["submitLeave"]>(
     (lr) => {
+      // Vacation Leave: auto-approve, allow negative credits capped at -12
+      // Sick Leave: always pending (no auto-approve)
+      const autoApprove = lr.leaveType === "Vacation Leave";
+      const status = autoApprove ? "Approved" : "Pending";
+
       const full: LeaveRequest = {
         ...lr,
         id: newId(),
         requestId: `LR-${Math.floor(Math.random() * 9000 + 1000)}`,
         createdAt: Date.now(),
+        status,
       };
       setLeaves((prev) => [full, ...prev]);
       repo.createLeave(full).catch(() => {});
-      // Credit deduction
+
+      // Credit handling
       setProfile((p) => {
-        let next = p;
-        if (lr.leaveType === "Vacation Leave")
-          next = { ...p, vlCredits: Math.max(0, p.vlCredits - lr.days) };
-        else if (lr.leaveType === "Sick Leave")
+        if (!p) return p;
+        let next = { ...p };
+        if (lr.leaveType === "Vacation Leave") {
+          // Allow negative credits, cap at -12
+          const newCredits = p.vlCredits - lr.days;
+          next = { ...p, vlCredits: Math.max(-12, newCredits) };
+        } else if (lr.leaveType === "Sick Leave") {
+          // Sick leave can be used even at 0 credits
           next = { ...p, slCredits: Math.max(0, p.slCredits - lr.days) };
-        else if (lr.leaveType === "Birthday Leave")
+        } else if (lr.leaveType === "Birthday Leave") {
           next = { ...p, blCredit: Math.max(0, p.blCredit - 1) };
+        }
         persistProfile(next);
         return next;
       });
-      toast(`${lr.leaveType} request submitted.`, "success");
+      toast(`${lr.leaveType} request ${autoApprove ? "approved" : "submitted"}.`, "success");
     },
     [toast, repo, persistProfile],
   );
@@ -487,9 +524,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     (id: string, reason: string) => {
       setLeaves((prev) => {
         const target = prev.find((l) => l.id === id);
-        if (target) {
+        if (target && profile) {
           setProfile((p) => {
-            let next = p;
+            if (!p) return p;
+            let next = { ...p };
             if (target.leaveType === "Vacation Leave")
               next = { ...p, vlCredits: p.vlCredits + target.days };
             else if (target.leaveType === "Sick Leave")
@@ -507,26 +545,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
         );
       });
       repo.updateLeave(id, { status: "Cancelled", cancellationReason: reason }).catch(() => {});
-      repo
-        .deleteCoverageByFilter({
-          coverageType: "Leave",
-          requesterId: profile.employeeId,
-          coverageStatus: "Available",
-        })
-        .catch(() => {});
-      setCoverage((prev) =>
-        prev.filter(
-          (c) =>
-            !(
-              c.coverageType === "Leave" &&
-              c.requesterId === profile.employeeId &&
-              c.coverageStatus === "Available"
-            ),
-        ),
-      );
+      if (profile) {
+        repo
+          .deleteCoverageByFilter({
+            coverageType: "Leave",
+            requesterId: profile.employeeId,
+            coverageStatus: "Available",
+          })
+          .catch(() => {});
+        setCoverage((prev) =>
+          prev.filter(
+            (c) =>
+              !(
+                c.coverageType === "Leave" &&
+                c.requesterId === profile.employeeId &&
+                c.coverageStatus === "Available"
+              ),
+          ),
+        );
+      }
       toast("Leave cancelled and credits returned.", "success");
     },
-    [profile.employeeId, toast, repo, persistProfile],
+    [profile, toast, repo, persistProfile],
   );
 
   const submitOt = useCallback<AppState["submitOt"]>(
@@ -576,6 +616,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const takeoverCoverage = useCallback(
     (id: string) => {
+      if (!profile) return;
       setCoverage((prev) =>
         prev.map((c) => {
           if (c.id !== id) return c;
@@ -598,7 +639,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         .catch(() => {});
       toast("Coverage taken over. Status set to Ongoing.", "success");
     },
-    [profile.employeeId, profile.fullName, toast, repo],
+    [profile, toast, repo],
   );
 
   const cancelCoverage = useCallback(
@@ -658,6 +699,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateProfile = useCallback(
     (patch: Partial<Profile>) => {
       setProfile((p) => {
+        if (!p) return p;
         const next = { ...p, ...patch };
         persistProfile(next);
         return next;
@@ -681,7 +723,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ---- context value ----
   const value = useMemo<AppState>(
     () => ({
-      isAuthed: !!session,
+      isAuthed: !!session && !!profile,
       session,
       signIn,
       signInWithEmployeeId,
@@ -692,7 +734,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       navigate,
       back,
       canGoBack: stack.length > 0,
-      profile,
+      profile: profile ?? EMPTY_PROFILE,
       attendance,
       leaves,
       ot,
