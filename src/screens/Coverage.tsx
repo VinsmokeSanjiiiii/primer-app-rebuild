@@ -52,7 +52,7 @@ export function Coverage() {
                 tab === t ? "bg-white text-indigo-600 shadow-sm dark:bg-slate-700 dark:text-indigo-300" : "text-slate-500"
               }`}
             >
-              {t === "available" ? "Available" : "Taken / Active"}
+              {t === "available" ? "Available" : "Ongoing"}
             </button>
           ))}
         </div>
@@ -114,7 +114,7 @@ export function Coverage() {
                         </span>
                       ) : (
                         <Button full variant="tonal" icon="swap" onClick={() => setConfirm({ kind: "take", req: c })}>
-                          Take over
+                          Grab
                         </Button>
                       )
                     )}
