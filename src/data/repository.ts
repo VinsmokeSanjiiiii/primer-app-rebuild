@@ -248,94 +248,121 @@ function asBoolean(v: unknown, fallback = false): boolean {
 
 /**
  * Profile record as it is stored under /Users/{Employee_ID_Number}.
- * The keys here are **exactly** the legacy Firebase keys — no
- * normalization, no snake_case conversion.
+ * Keys match the exact Firebase field names from the primerdb2 export.
  */
 interface FbUserRecord {
+  // Identity
   Employee_ID_Number?: string;
-  EmployeeId?: string;
+  EmployeeId?: string;           // legacy alias
+  Full_Name?: string;
+  Phone_Name?: string;
+  // Auth
   Primer_Email?: string;
+  Personal_Email?: string;
   Password?: string;
   Device_ID?: string;
   PublicKey?: string;
-  Full_Name?: string;
-  Personal_Email?: string;
-  Contact_Number?: string;
-  Address?: string;
-  Birth_date?: string;
-  Date_Started?: string;
-  Tenure?: string;
+  // Employment details
   Department?: string;
   Role?: string;
   Position?: string;
   Team?: string;
+  Status?: string;               // "Permanent" | "Probationary" | "Resigned" etc.
+  Date_Started?: string;
+  Tenure?: string;
   Schedule?: string;
   Days_Off?: string;
-  Status?: string;
-  Work_Setup?: string;
-  Phone_Name?: string;
+  workSetup?: string;            // production DB field (camelCase): "WFH" | "On-site"
+  Work_Setup?: string;           // legacy alias
+  Rate?: string;
+  Basic_Salary?: number;
+  UserAccountChange?: string;
+  // Contact / personal
+  Address?: string;
+  Birth_date?: string;
+  Contact_Number?: string;
+  // Leave credits
   VL_Credits?: number;
   SL_Credits?: number;
   BL_Credit?: number;
   SL_Conversion_Credits?: number;
-  Profile_Image?: string;
-  Notes?: string;
+  // Government IDs
   PhilHealth?: string;
   SSS?: string;
   TIN?: string;
   Pag_Ibig?: string;
+  // Miscellaneous
+  Notes?: string;
+  Profile_Image?: string;
   HealthCard?: string;
-  isClockedIn?: boolean;
   proofUrl?: string;
+  isClockedIn?: boolean;
+  reserved_1?: string;
+  reserved_2?: string;
 }
 
 interface FbAttendanceRecord {
+  // Core identifiers (from primerdb2 Attendance node)
   AttendanceID?: string;
   Employee_ID_Number?: string;
   Phone_Name?: string;
+  Team?: string;
+  // Status fields
   isClockedIn?: boolean;
-  Status?: string;
+  Status?: string;               // "None" | "Vacation Leave" | "Sick Leave" etc.
   Note?: string;
-  date_in?: string;
+  // Time fields
+  date_in?: string;              // "M/D/YYYY"
   date_out?: string;
-  time_in?: string;
+  time_in?: string;              // "HH:mm"
   time_out?: string;
   total_hours?: number;
   mins_late?: number;
+  // Leave/Holiday flags
+  ABonus?: number;
+  Infraction?: number;
+  RHoliday?: number;             // Regular Holiday flag
+  SHoliday?: number;             // Special Holiday flag
+  // Work setup
+  workSetup?: string;            // "WFH" | "On-site"
+  // Period
+  month?: string;
+  year?: number | string;
+  // App-specific fields (may exist on some records)
   recordType?: string;
+  clock_in_ts?: number;          // Unix-ms at clock-in (server time) — for precise duration
   clock_out_ts?: number;
   note_last_edited_ts?: number;
   note_locked?: boolean;
-  ABonus?: number;
-  Infraction?: number;
-  RHoliday?: number;
-  SHoliday?: number;
-  Team?: string;
-  workSetup?: string;
-  month?: string;
-  year?: number;
 }
 
 interface FbLeaveRecord {
+  // Core (from primerdb2 LeaveRequests node)
   requestId?: string;
-  leaveType?: string;
-  status?: string;
-  timestamp?: number;
-  leaveDate?: string;
+  leaveType?: string;            // "Vacation Leave" | "Sick Leave" | "Birthday Leave" etc.
+  status?: string;               // "Approved" | "Pending" | "Rejected" | "Cancelled"
+  leaveDate?: string;            // "M/D/YYYY"
+  days?: number | string;        // stored as string "1" in DB
   reason?: string;
   proofUrl?: string;
-  Full_Name?: string;
-  days?: number;
-  position?: string;
-  year?: number;
-  month?: string;
-  convertedTimestamp?: number;
+  // Employee info (denormalised on write)
   Employee_ID_Number?: string;
+  Full_Name?: string;
+  Phone_Name?: string;
+  position?: string;
+  // Schedule / leave context
   Days_Off?: string;
   Schedule?: string;
-  Phone_Name?: string;
-  Coverage_Status?: string;
+  Coverage_Status?: string;      // "None" | coverage ID
+  CoverageID?: string;           // optional — set when coverage is arranged
   Cancellation_Reason?: string;
+  // Timestamps
+  timestamp?: number | string;   // stored as "N/A" on some records
+  convertedTimestamp?: string;   // human-readable "M/D/YYYY h:mm:ss AM/PM"
+  // Period
+  month?: string;
+  year?: number | string;        // stored as string "2026" in DB
+  // Legacy / unused
   proofAttached?: boolean;
 }
 
@@ -355,24 +382,28 @@ interface FbOtRecord {
 }
 
 interface FbCoverageRecord {
+  // Core (from primerdb2 CoverageList node)
   CoverageID?: string;
-  CoverageDate?: string;
-  CoverageTime?: string;
-  CoveragePosition?: string;
-  month?: string;
-  year?: number;
-  CoverageType?: string;
-  forCoverageHours?: number;
-  CoverageStatus?: string;
-  CoveredbyID?: string;
-  TakenBy?: string;
-  Days_Off?: string;
-  Position?: string;
+  CoverageDate?: string;         // "M/D/YYYY" or "M/D/YYYY hh:mm:ss AM/PM"
+  CoverageTime?: string;         // "HH:mm-HH:mm"
+  CoverageType?: string;         // "Regular Shift" | "OT" etc.
+  CoverageStatus?: string;       // "Completed" | "Pending" | "Cancelled"
+  CoveredHours?: number | string; // stored as string "8" in DB
+  forCoverageHours?: number | string;
+  // Employee info (may be "Open" when no one assigned yet)
   Employee_ID_Number?: string;
-  CoveredHours?: number;
   Phone_Name?: string;
+  Position?: string;
   Schedule?: string;
   Team?: string;
+  Days_Off?: string;
+  // Period
+  month?: string;
+  year?: number | string;
+  // Legacy / extended fields
+  CoveragePosition?: string;
+  CoveredbyID?: string;
+  TakenBy?: string;
   requesterId?: string;
   Full_Name?: string;
   requesterName?: string;
@@ -395,7 +426,14 @@ interface FbInfractionRecord {
 }
 
 interface FbHolidayRecord {
-  HDate?: string;
+  // From primerdb2 Holidays node (key is "MM-DD-YYYY")
+  Holiday?: string;     // Primary name field: "New Year's Day" etc.
+  HDate?: string;       // "M/D/YYYY" — display date
+  HType?: string;       // "Regular" | "Special"
+  HolidayID?: string;   // "<Holiday Name>-MM-DD-YYYY"
+  month?: string;       // stored as string "1"–"12"
+  year?: number | string;
+  // Legacy / fallback field names
   name?: string;
   Name?: string;
   HolidayName?: string;
@@ -688,14 +726,14 @@ export class FirebaseRepository implements Repository {
   // -------------------------------------------------------------------------
 
   async getInfractions(employeeId: string) {
-    const q = query(
-      ref(this.db, "InfractionList"),
-      orderByChild("Employee_ID_Number"),
-      equalTo(employeeId),
-    );
-    const snap = await get(q);
+    // Fetch all InfractionList records and filter client-side.
+    // Avoids requiring a Firebase index on Employee_ID_Number in the DB rules,
+    // which causes silent failures when the index is absent.
+    const snap = await get(ref(this.db, "InfractionList"));
     const raw = toObject<Record<string, FbInfractionRecord>>(snap) ?? {};
-    return Object.entries(raw).map(([id, rec]) => mapInfraction(id, rec));
+    return Object.entries(raw)
+      .map(([id, rec]) => mapInfraction(id, rec))
+      .filter((r) => r.employeeId === employeeId);
   }
 
   // -------------------------------------------------------------------------
@@ -760,7 +798,7 @@ export class FirebaseRepository implements Repository {
 // ---------------------------------------------------------------------------
 
 function mapUserToProfile(id: string, rec: FbUserRecord): Profile {
-  const workSetup = asString(rec.Work_Setup);
+  const workSetup = asString(rec.workSetup ?? rec.Work_Setup);
   const isFlextime = workSetup.toLowerCase() === "flextime" || asBoolean((rec as unknown as { isFlextime?: boolean }).isFlextime, false);
   return {
     id,
@@ -829,6 +867,7 @@ function mapAttendance(id: string, rec: FbAttendanceRecord): AttendanceRecord {
     totalHours: rec.total_hours !== undefined ? asNumber(rec.total_hours) : undefined,
     note: asString(rec.Note),
     noteLocked: asBoolean(rec.note_locked),
+    clockInTs: rec.clock_in_ts !== undefined ? asNumber(rec.clock_in_ts) : undefined,
     clockOutTs: rec.clock_out_ts !== undefined ? asNumber(rec.clock_out_ts) : undefined,
     noteLastEditedTs: rec.note_last_edited_ts !== undefined ? asNumber(rec.note_last_edited_ts) : undefined,
     minsLate: asNumber(rec.mins_late),
@@ -841,26 +880,30 @@ function mapAttendance(id: string, rec: FbAttendanceRecord): AttendanceRecord {
 }
 
 function mapAttendanceToFb(r: AttendanceRecord): Record<string, unknown> {
-  return {
+  // Firebase RTDB v9 `set()` throws if ANY value in the payload is `undefined`.
+  // Only include fields that actually have a value — use conditional assignment
+  // for optional fields that are absent on a fresh clock-in record.
+  const m: Record<string, unknown> = {
     AttendanceID: r.attendanceCode,
     Employee_ID_Number: r.employeeId,
-    Phone_Name: undefined,
     isClockedIn: r.isClockedIn,
     Status: r.status,
-    Note: r.note,
+    Note: r.note ?? "",
     date_in: r.dateIn,
-    date_out: r.dateOut,
     time_in: r.timeIn,
-    time_out: r.timeOut,
-    total_hours: r.totalHours,
-    mins_late: r.minsLate,
+    mins_late: r.minsLate ?? 0,
     recordType: r.recordType,
-    clock_out_ts: r.clockOutTs,
-    note_last_edited_ts: r.noteLastEditedTs,
-    note_locked: r.noteLocked,
+    note_locked: r.noteLocked ?? false,
     month: r.month,
     year: r.year,
   };
+  if (r.clockInTs !== undefined) m.clock_in_ts = r.clockInTs;
+  if (r.clockOutTs !== undefined) m.clock_out_ts = r.clockOutTs;
+  if (r.dateOut !== undefined) m.date_out = r.dateOut;
+  if (r.timeOut !== undefined) m.time_out = r.timeOut;
+  if (r.totalHours !== undefined) m.total_hours = r.totalHours;
+  if (r.noteLastEditedTs !== undefined) m.note_last_edited_ts = r.noteLastEditedTs;
+  return m;
 }
 
 function mapAttendancePatchToFb(r: Partial<AttendanceRecord>): Record<string, unknown> {
@@ -871,6 +914,7 @@ function mapAttendancePatchToFb(r: Partial<AttendanceRecord>): Record<string, un
   if (r.dateOut !== undefined) m.date_out = r.dateOut;
   if (r.timeOut !== undefined) m.time_out = r.timeOut;
   if (r.totalHours !== undefined) m.total_hours = r.totalHours;
+  if (r.clockInTs !== undefined) m.clock_in_ts = r.clockInTs;
   if (r.clockOutTs !== undefined) m.clock_out_ts = r.clockOutTs;
   if (r.noteLastEditedTs !== undefined) m.note_last_edited_ts = r.noteLastEditedTs;
   if (r.noteLocked !== undefined) m.note_locked = r.noteLocked;
@@ -1061,7 +1105,8 @@ function mapHoliday(id: string, rec: FbHolidayRecord): Holiday {
   return {
     id,
     hdate: asString(rec.HDate),
-    name: asString(rec.name || rec.Name || rec.HolidayName),
+    name: asString(rec.Holiday || rec.HolidayName || rec.name || rec.Name),
+    htype: rec.HType ? asString(rec.HType) : undefined,
   };
 }
 

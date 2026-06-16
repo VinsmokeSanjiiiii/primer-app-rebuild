@@ -1,12 +1,25 @@
+import { useEffect } from "react";
 import { useApp } from "../store";
 import { AppBar } from "../components/AppBar";
 import { Card, Badge, EmptyState, Field } from "../components/ui";
 import { Icon } from "../components/Icon";
 
+const SEEN_INFRACTIONS_KEY = "primer_seen_infractions";
+
 export function Infractions() {
   const { infractions, profile } = useApp();
   const mine = infractions.filter((i) => i.employeeId === profile.employeeId);
   const totalLost = mine.reduce((s, i) => s + i.lostMinutes, 0);
+
+  // Mark all currently loaded infractions as seen when the user opens this screen.
+  // Dashboard reads this key to compute the unseen badge count.
+  useEffect(() => {
+    if (mine.length === 0) return;
+    try {
+      const ids = mine.map((i) => i.id);
+      localStorage.setItem(SEEN_INFRACTIONS_KEY, JSON.stringify(ids));
+    } catch { /* ignore */ }
+  }, [mine]);
 
   return (
     <div className="flex h-full flex-col">
@@ -39,7 +52,6 @@ export function Infractions() {
                 <Badge tone="rose">{i.lostMinutes} min</Badge>
               </div>
 
-              {/* Show all relevant fields from InfractionList */}
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                 {i.infractionId && <Field label="Infraction ID" value={i.infractionId} />}
                 {i.daysOff && <Field label="Days Off" value={i.daysOff} />}

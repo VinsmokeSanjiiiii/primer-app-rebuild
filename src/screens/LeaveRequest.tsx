@@ -212,11 +212,11 @@ export function LeaveRequest() {
         footer={
           <>
             <Button variant="secondary" full onClick={() => { setCreditWarn(false); setType(null); }}>Cancel</Button>
-            <Button full onClick={() => setCreditWarn(false)}>Continue anyway</Button>
+            <Button full onClick={() => setCreditWarn(false)}>Proceed anyway</Button>
           </>
         }
       >
-        <p>You have <b>{profile.vlCredits}</b> vacation credits. You can still submit, but it may result in an unpaid leave.</p>
+        <p>You have <b>{profile.vlCredits}</b> vacation credits. You can still submit, but it may result in a negative balance. Do you wish to proceed?</p>
       </Dialog>
 
       {/* Review */}
@@ -237,7 +237,7 @@ export function LeaveRequest() {
         <ReviewRow label="Full name" value={profile.fullName} />
         <ReviewRow label="Reason" value={reason || "Birthday leave"} />
         <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
-          Submitting creates the leave record, coverage record (if relevant), and updates credits.
+          Please double-check your details before submitting. Once sent, this request will be forwarded to your supervisor for approval and your leave balance will be updated.
         </p>
       </Dialog>
     </div>

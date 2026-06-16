@@ -341,7 +341,7 @@ export function Login() {
 
       <div className="mt-8 rounded-xl bg-slate-100/70 p-3 text-center text-xs text-slate-500 dark:bg-white/5 dark:text-slate-400">
         <p className="flex items-center justify-center gap-1.5 font-semibold">
-          <Icon name="shield" size={14} /> Secured by Firebase + platform biometrics
+          <Icon name="shield" size={14} /> Secured by Firebase + Platform biometrics
         </p>
         <p className="mt-1">
           Accounts are stored in the Primer Realtime Database. Biometric unlock

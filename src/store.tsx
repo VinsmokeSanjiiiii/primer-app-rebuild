@@ -25,6 +25,7 @@ import {
   fmtTime,
   serverNow,
   monthName,
+  phtYear,
   computeTotalHours,
   setServerTimeOffsetMs,
 } from "./lib/date";
@@ -34,6 +35,25 @@ import {
 // ---------------------------------------------------------------------------
 const SESSION_KEY = "primer_portal_session";
 const THEME_KEY = "primer_portal_theme";
+// Persists the active (open) clock-in record so the session survives a tab
+// close / page reload even when the Firebase write is slow or temporarily
+// unavailable.  Cleared atomically when the user clocks out.
+const ACTIVE_SESSION_KEY = "primer_active_session";
+
+function saveActiveSession(rec: AttendanceRecord): void {
+  try { localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(rec)); } catch { /* ignore */ }
+}
+function clearActiveSession(): void {
+  try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch { /* ignore */ }
+}
+function loadActiveSession(): AttendanceRecord | null {
+  try {
+    const raw = localStorage.getItem(ACTIVE_SESSION_KEY);
+    if (!raw) return null;
+    const rec = JSON.parse(raw) as AttendanceRecord;
+    return rec?.isClockedIn ? rec : null;
+  } catch { return null; }
+}
 
 // ---------------------------------------------------------------------------
 // Default empty profile for unauthenticated state
@@ -239,7 +259,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
         repo.getNotifications(empId).catch(() => []),
       ]);
       if (p) setProfile(p);
-      setAttendance(a);
+
+      // Belt-and-suspenders: if Firebase has no open attendance record but
+      // localStorage has one (e.g. the Firebase write was temporarily
+      // unavailable when the user clocked in), restore it into React state and
+      // attempt a background sync to Firebase.
+      const hasOpenRecord = a.some((r) => r.isClockedIn);
+      if (!hasOpenRecord) {
+        const saved = loadActiveSession();
+        if (saved && saved.employeeId === empId) {
+          setAttendance([saved, ...a]);
+          // Re-attempt the Firebase write in the background.
+          repo.createAttendance(saved).catch(() => {});
+        } else {
+          setAttendance(a);
+        }
+      } else {
+        // Firebase has the real record — local backup no longer needed.
+        clearActiveSession();
+        setAttendance(a);
+      }
+
       setLeaves(l);
       setOt(o);
       setCoverage(c);
@@ -320,6 +360,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSession(null);
     localStorage.removeItem(SESSION_KEY);
     sessionStorage.removeItem(SESSION_KEY);
+    clearActiveSession(); // also clear any open clock-in session
     setScreen("dashboard");
     setStack([]);
     repo.signOut().catch(() => {});
@@ -396,18 +437,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast("Please sign in first.", "error");
       return;
     }
-    // Guard against duplicate open attendance records
+    const now = serverNow();
+    const nowMs = now.getTime();
+    // Guard against duplicate open attendance records.
+    // `alreadyOpen` and `newRecord` are closure variables — safe to read after
+    // `setAttendance` because the functional updater runs synchronously.
     let alreadyOpen = false;
+    let newRecord: AttendanceRecord | null = null;
+
     setAttendance((prev) => {
       alreadyOpen = prev.some((r) => r.isClockedIn);
       if (alreadyOpen) return prev;
-      const now = serverNow();
       const rec: AttendanceRecord = {
         id: newId(),
         attendanceCode: `ATT-${Math.floor(Math.random() * 9000 + 1000)}`,
         employeeId: profile.employeeId,
         dateIn: fmtDate(now),
         timeIn: fmtTime(now),
+        // clockInTs (unix ms) gives clock-out precise duration even after a
+        // long idle session where the Device/string-format times would be stale.
+        clockInTs: nowMs,
         note: "",
         noteLocked: false,
         minsLate: 0,
@@ -415,49 +464,130 @@ export function AppProvider({ children }: { children: ReactNode }) {
         status: "Open",
         isClockedIn: true,
         month: monthName(now),
-        year: now.getFullYear(),
+        year: phtYear(now),
       };
-      repo.createAttendance(rec).catch(() => {});
+      newRecord = rec;
       return [rec, ...prev];
     });
+
     if (alreadyOpen) {
       toast("You're already clocked in.", "info");
       return;
     }
+
+    // Persist the session to localStorage FIRST so the active session card
+    // survives a tab close / page reload regardless of the Firebase outcome.
+    // hydrateAll will restore it and retry the write on next app open.
+    if (newRecord) saveActiveSession(newRecord);
+
+    // Write to Firebase outside the state updater to avoid the side-effect
+    // being invoked twice in React Strict Mode / Concurrent Mode.
+    setTimeout(() => {
+      if (newRecord) {
+        repo
+          .createAttendance(newRecord)
+          .then(() => {
+            // Firebase confirmed — backup is now redundant but kept until
+            // clock-out clears it, so offline reopens still show the session.
+          })
+          .catch(() => {
+            // Firebase write failed but the record is already in React state
+            // and localStorage.  The user can continue working; hydrateAll
+            // will retry the write on the next app open.
+            const offline = !navigator.onLine;
+            toast(
+              offline
+                ? "You're offline — clock-in saved locally and will sync when you reconnect."
+                : "Network error — clock-in saved locally. Check your connection.",
+              "error",
+            );
+          });
+        newRecord = null;
+      }
+    }, 0);
+
     setProfile((p) => {
       if (!p) return p;
       const next = { ...p, isClockedIn: true };
       persistProfile(next);
       return next;
     });
-    toast("Clocked in. Reminders scheduled for your shift.", "success");
+    toast("Clocked in successfully.", "success");
   }, [profile, toast, repo, persistProfile]);
 
 
   const clockOut = useCallback(() => {
     if (!profile) return;
     const now = serverNow();
+    const nowMs = now.getTime();
+    const dateOut = fmtDate(now);
+    const timeOut = fmtTime(now);
+    const empId = profile.employeeId;
+
+    let updatedRecord: AttendanceRecord | null = null;
+
     setAttendance((prev) => {
-      const idx = prev.findIndex((r) => r.isClockedIn);
-      if (idx === -1) return prev;
-      const r = prev[idx];
-      const dateOut = fmtDate(now);
-      const timeOut = fmtTime(now);
-      const total = computeTotalHours(r.dateIn, r.timeIn, dateOut, timeOut);
+      // If React state lost the open record (e.g. after a hot-reload or stale
+      // state from a long idle session), recover it from localStorage before
+      // computing the clock-out.  This is a read-only call so calling it twice
+      // in Strict Mode is safe.
+      let working = prev;
+      if (!prev.some((r) => r.isClockedIn)) {
+        const saved = loadActiveSession();
+        if (saved && saved.employeeId === empId) {
+          working = [saved, ...prev];
+        }
+      }
+
+      const idx = working.findIndex((r) => r.isClockedIn);
+      if (idx === -1) return prev; // genuinely nothing to close
+
+      const r = working[idx];
+
+      // Prefer unix-ms precision when clockInTs is stored; fall back to
+      // string-parsing for legacy records that pre-date the field.
+      const totalHours =
+        r.clockInTs != null
+          ? Math.max(0, Math.round(((nowMs - r.clockInTs) / 3.6e6) * 100) / 100)
+          : computeTotalHours(r.dateIn, r.timeIn, dateOut, timeOut);
+
       const updated: AttendanceRecord = {
         ...r,
         dateOut,
         timeOut,
-        totalHours: total,
+        totalHours,
         isClockedIn: false,
         status: "Complete",
-        clockOutTs: now.getTime(),
+        clockOutTs: nowMs,
       };
-      const copy = [...prev];
+      updatedRecord = updated;
+      const copy = [...working];
       copy[idx] = updated;
-      repo.updateAttendance(updated.id, updated).catch(() => {});
       return copy;
     });
+
+    // Clear the local backup immediately — the session is now closed.
+    clearActiveSession();
+
+    // Firebase write outside the updater — safe from double-invocation in
+    // Strict Mode because `updatedRecord` is nulled after the first call.
+    setTimeout(() => {
+      if (updatedRecord) {
+        repo
+          .updateAttendance(updatedRecord.id, updatedRecord)
+          .catch(() => {
+            const offline = !navigator.onLine;
+            toast(
+              offline
+                ? "You're offline — clock-out will retry when you reconnect."
+                : "Network error — clock-out may not have saved. Check your connection.",
+              "error",
+            );
+          });
+        updatedRecord = null;
+      }
+    }, 0);
+
     setProfile((p) => {
       if (!p) return p;
       const next = { ...p, isClockedIn: false };

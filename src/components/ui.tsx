@@ -146,9 +146,11 @@ export function TextArea({
 export function Badge({
   children,
   tone = "slate",
+  className,
 }: {
   children: ReactNode;
   tone?: "slate" | "green" | "amber" | "rose" | "indigo" | "sky";
+  className?: string;
 }) {
   const tones = {
     slate: "bg-slate-100 text-slate-600 dark:bg-white/10 dark:text-slate-300",
@@ -163,6 +165,7 @@ export function Badge({
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold",
         tones[tone],
+        className,
       )}
     >
       {children}

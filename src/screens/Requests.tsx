@@ -4,37 +4,62 @@ import { AppBar } from "../components/AppBar";
 import { Card, Button, Badge, EmptyState, Dialog, TextArea, TextField } from "../components/ui";
 import { Icon } from "../components/Icon";
 import { StatusBadge } from "./Dashboard";
-import { parseDate, startOfDay, serverNow } from "../lib/date";
+import { MONTHS, parseDate, startOfDay, serverNow, currentServerMonth, currentServerYear } from "../lib/date";
 import type { LeaveRequest, OtRequest } from "../types";
+
+function buildYears(): string[] {
+  const curr = currentServerYear();
+  const base = [2024, 2025, 2026];
+  if (!base.includes(curr)) base.push(curr);
+  base.sort((a, b) => a - b);
+  return base.map(String);
+}
 
 export function Requests() {
   const { leaves, ot, cancelLeave, cancelOt, navigate } = useApp();
   const [tab, setTab] = useState<"leave" | "ot">("leave");
   const [search, setSearch] = useState("");
+  const [filterMonth, setFilterMonth] = useState(() => currentServerMonth());
+  const [filterYear, setFilterYear] = useState(() => String(currentServerYear()));
   const [cancelTarget, setCancelTarget] = useState<{ kind: "leave" | "ot"; id: string } | null>(null);
   const [reason, setReason] = useState("");
+
+  const FILTER_YEARS = useMemo(() => buildYears(), []);
 
   const today = startOfDay(serverNow());
 
   const leaveList = useMemo(
     () =>
       leaves
-        .filter((l) => `${l.leaveType} ${l.reason} ${l.status}`.toLowerCase().includes(search.toLowerCase()))
+        .filter((l) => {
+          const text = `${l.leaveType} ${l.reason} ${l.status}`.toLowerCase();
+          const bySearch = text.includes(search.toLowerCase());
+          const byMonth = filterMonth === "All" || l.month === filterMonth;
+          const byYear = filterYear === "All" || String(l.year) === filterYear;
+          return bySearch && byMonth && byYear;
+        })
         .sort((a, b) => b.createdAt - a.createdAt),
-    [leaves, search],
+    [leaves, search, filterMonth, filterYear],
   );
+
   const otList = useMemo(
     () =>
       ot
-        .filter((o) => `${o.otType} ${o.reason} ${o.status}`.toLowerCase().includes(search.toLowerCase()))
+        .filter((o) => {
+          const text = `${o.otType} ${o.reason} ${o.status}`.toLowerCase();
+          const bySearch = text.includes(search.toLowerCase());
+          const byMonth = filterMonth === "All" || o.month === filterMonth;
+          const byYear = filterYear === "All" || String(o.year) === filterYear;
+          return bySearch && byMonth && byYear;
+        })
         .sort((a, b) => b.createdAt - a.createdAt),
-    [ot, search],
+    [ot, search, filterMonth, filterYear],
   );
 
   const canCancelLeave = (l: LeaveRequest) => {
     if (l.status !== "Pending" && l.status !== "Approved") return false;
     const first = parseDate(l.leaveDate[0]);
-    return first > today; // not same-day or past
+    return first > today;
   };
   const canCancelOt = (o: OtRequest) => {
     if (o.status !== "Pending" && o.status !== "Approved") return false;
@@ -53,22 +78,43 @@ export function Requests() {
         }
       />
       <div className="flex-1 space-y-4 overflow-y-auto px-4 pb-6 pt-4">
+        {/* Tab bar */}
         <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-white/5">
           {(["leave", "ot"] as const).map((t) => (
             <button key={t} onClick={() => setTab(t)}
               className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
                 tab === t ? "bg-white text-indigo-600 shadow-sm dark:bg-slate-700 dark:text-indigo-300" : "text-slate-500"
               }`}>
-              {t === "leave" ? `Leave (${leaves.length})` : `OT (${ot.length})`}
+              {t === "leave" ? `Leave (${leaveList.length})` : `OT (${otList.length})`}
             </button>
           ))}
+        </div>
+
+        {/* Month / Year filter */}
+        <div className="flex gap-2">
+          <select
+            value={filterMonth}
+            onChange={(e) => setFilterMonth(e.target.value)}
+            className="flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-white/15 dark:bg-slate-900/50 dark:text-white"
+          >
+            <option value="All">All months</option>
+            {MONTHS.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+          <select
+            value={filterYear}
+            onChange={(e) => setFilterYear(e.target.value)}
+            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-white/15 dark:bg-slate-900/50 dark:text-white"
+          >
+            <option value="All">All years</option>
+            {FILTER_YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
         </div>
 
         <TextField placeholder="Search requests…" value={search} onChange={(e) => setSearch(e.target.value)} />
 
         {tab === "leave" ? (
           leaveList.length === 0 ? (
-            <EmptyState icon="umbrella" title="No leave requests" />
+            <EmptyState icon="umbrella" title="No leave requests" subtitle="No records for the selected period." />
           ) : (
             <div className="space-y-2">
               {leaveList.map((l) => (
@@ -102,7 +148,7 @@ export function Requests() {
             </div>
           )
         ) : otList.length === 0 ? (
-          <EmptyState icon="bolt" title="No OT requests" />
+          <EmptyState icon="bolt" title="No OT requests" subtitle="No records for the selected period." />
         ) : (
           <div className="space-y-2">
             {otList.map((o) => (
@@ -156,7 +202,7 @@ export function Requests() {
         }
       >
         <p className="text-xs text-slate-400">
-          Cancelling removes the request, deletes related attendance/coverage records, and returns the proper leave credit.
+          Cancelling removes the request and returns the proper leave credit.
         </p>
         <TextArea label="Cancellation reason" rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why are you cancelling?" />
       </Dialog>

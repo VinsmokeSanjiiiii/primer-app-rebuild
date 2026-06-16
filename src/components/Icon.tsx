@@ -5,7 +5,7 @@ type IconName =
   | "shield" | "wifi" | "eye" | "eye-off" | "check" | "x" | "plus" | "edit"
   | "lock" | "logout" | "sun" | "moon" | "chevron" | "filter" | "swap"
   | "umbrella" | "bolt" | "wrench" | "alert" | "camera" | "search" | "download"
-  | "info" | "refresh" | "fingerprint" | "id";
+  | "info" | "refresh" | "fingerprint" | "id" | "wifi-off";
 
 const paths: Record<IconName, string> = {
   home: "M3 11.5 12 4l9 7.5M5 10v10h14V10",
@@ -17,6 +17,7 @@ const paths: Record<IconName, string> = {
   bell: "M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6M10 20a2 2 0 0 0 4 0",
   shield: "M12 3 5 6v6c0 4 3 7 7 9 4-2 7-5 7-9V6l-7-3Z",
   wifi: "M5 12.5a10 10 0 0 1 14 0M8 16a5 5 0 0 1 8 0M12 20h.01",
+  "wifi-off": "M2 2l20 20M8.5 16.5a5 5 0 0 1 7 0M5 12.5a10 10 0 0 1 5.2-2.8M10.9 7a10 10 0 0 1 8.1 3M12 20h.01",
   eye: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
   "eye-off": "M3 3l18 18M10.5 10.7a3 3 0 0 0 4 4M6.7 6.7C4 8.3 2 12 2 12s3.5 7 10 7c1.6 0 3-.3 4.3-.9M9.9 5.2A10 10 0 0 1 12 5c6.5 0 10 7 10 7a18 18 0 0 1-2.4 3.3",
   check: "M5 13l4 4L19 7",
