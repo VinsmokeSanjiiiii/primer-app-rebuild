@@ -1,15 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApp } from "../store";
 import { AppBar } from "../components/AppBar";
 import { Card, Button, Badge } from "../components/ui";
 import { Icon } from "../components/Icon";
 import { serverNow, deviceTimeIsSafe, fmtTime, fmtDate } from "../lib/date";
+import { scheduleShiftReminders } from "../lib/reminders";
+
+const SHIFT_START = "08:45";
+const SHIFT_END = "18:00";
 
 export function Clock() {
-  const { profile, clockIn, clockOut, navigate, attendance } = useApp();
+  const { profile, clockIn, clockOut, navigate, attendance, clockBusy } = useApp();
   const [now, setNow] = useState(serverNow());
   const [verifying, setVerifying] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const verifyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Live clock — updates every second using server-adjusted time
   useEffect(() => {
@@ -29,9 +34,26 @@ export function Clock() {
     };
   }, []);
 
+  // Cleanup pending verify timer on unmount
+  useEffect(() => {
+    return () => {
+      if (verifyTimer.current) clearTimeout(verifyTimer.current);
+    };
+  }, []);
+
+  // Schedule native Android shift reminders (no-op on web).
+  useEffect(() => {
+    void scheduleShiftReminders({ shiftStart: SHIFT_START, shiftEnd: SHIFT_END });
+  }, []);
+
   const safe = deviceTimeIsSafe();
   const skewMs = Math.abs(Date.now() - serverNow().getTime());
+
+  // Authoritative active-session derivation: attendance state is the source
+  // of truth (store reconciles it from the local backup on hydrate), the
+  // profile flag is only a mirror for backward compatibility.
   const openRecord = attendance.find((r) => r.isClockedIn);
+  const isClockedIn = !!openRecord;
 
   // Calculate elapsed time for the active session
   const elapsedLabel = (() => {
@@ -44,16 +66,21 @@ export function Clock() {
   })();
 
   const doClock = async () => {
-    if (!safe || !isOnline) return;
+    if (!safe || !isOnline || verifying || clockBusy) return;
     setVerifying(true);
     // 900ms window — allows server-time cross-check to settle
-    await new Promise<void>((r) => setTimeout(r, 900));
+    await new Promise<void>((resolve) => {
+      verifyTimer.current = setTimeout(() => {
+        verifyTimer.current = null;
+        resolve();
+      }, 900);
+    });
     setVerifying(false);
-    if (profile.isClockedIn) clockOut();
-    else clockIn();
+    if (isClockedIn) await clockOut();
+    else await clockIn();
   };
 
-  const canAct = safe && isOnline && !verifying;
+  const canAct = safe && isOnline && !verifying && !clockBusy;
 
   return (
     <div className="flex h-full flex-col">
@@ -73,10 +100,10 @@ export function Clock() {
           <div className="mt-4 inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs">
             <span
               className={`h-2 w-2 rounded-full ${
-                profile.isClockedIn ? "bg-emerald-400" : "bg-rose-400"
+                isClockedIn ? "bg-emerald-400" : "bg-rose-400"
               } animate-pulse`}
             />
-            {profile.isClockedIn ? "Currently Clocked In" : "Currently Clocked Out"}
+            {isClockedIn ? "Currently Clocked In" : "Currently Clocked Out"}
           </div>
           {profile.isFlextime && (
             <Badge tone="indigo" className="mt-3">
@@ -112,7 +139,8 @@ export function Clock() {
             : `Device clock offset by ${Math.round(skewMs / 1000)}s — clock actions blocked`}
         </div>
 
-        {/* Active session card */}
+        {/* Active session card — visible whenever there is an open record,
+            including after a cold restart while reconciliation is in flight. */}
         {openRecord && (
           <Card>
             <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-400">
@@ -138,18 +166,20 @@ export function Clock() {
         {/* Clock action */}
         <Button
           full
-          variant={profile.isClockedIn ? "danger" : "primary"}
+          variant={isClockedIn ? "danger" : "primary"}
           disabled={!canAct}
           onClick={doClock}
           className="py-4 text-base"
         >
           {verifying ? (
             <>Verifying server time…</>
+          ) : clockBusy ? (
+            <>Saving…</>
           ) : !isOnline ? (
             <><Icon name="wifi-off" size={20} /> No connection</>
           ) : !safe ? (
             <><Icon name="alert" size={20} /> Clock skewed — blocked</>
-          ) : profile.isClockedIn ? (
+          ) : isClockedIn ? (
             <><Icon name="clock" size={20} /> Clock Out</>
           ) : (
             <><Icon name="clock" size={20} /> Clock In</>
@@ -162,11 +192,11 @@ export function Clock() {
             <Icon name="bell" size={16} /> Scheduled reminders
           </p>
           <div className="space-y-2 text-sm">
-            <ReminderRow label="Shift start reminder" time="08:45" tone="indigo" />
-            <ReminderRow label="Shift end reminder" time="18:00" tone="sky" />
+            <ReminderRow label="Shift start reminder" time={SHIFT_START} tone="indigo" />
+            <ReminderRow label="Shift end reminder" time={SHIFT_END} tone="sky" />
           </div>
           <p className="mt-3 rounded-lg bg-slate-50 p-2 text-xs text-slate-400 dark:bg-white/5">
-            Reminders are scheduled via Work Manager
+            Delivered via native notifications — fires even when the app is closed.
           </p>
         </Card>
 

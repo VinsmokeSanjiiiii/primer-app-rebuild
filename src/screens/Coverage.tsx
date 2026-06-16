@@ -187,14 +187,6 @@ export function Coverage() {
       <AppBar
         title="Coverage Board"
         subtitle="Available, ongoing & completed"
-        action={
-          <button
-            onClick={() => navigate("coverage-records")}
-            className="rounded-full px-3 py-1.5 text-xs font-bold text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-white/5"
-          >
-            History
-          </button>
-        }
       />
       <div className="flex-1 space-y-4 overflow-y-auto px-4 pb-6 pt-4">
 

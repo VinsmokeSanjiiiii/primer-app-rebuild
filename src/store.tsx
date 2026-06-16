@@ -30,30 +30,25 @@ import {
   setServerTimeOffsetMs,
 } from "./lib/date";
 
+import {
+  loadActiveSession,
+  saveActiveSession,
+  clearActiveSession as clearActiveSessionLS,
+  purgeAllActiveSessions,
+  markPending,
+} from "./lib/activeSession";
+import {
+  reconcileActiveSession,
+  persistAttendanceWithRetry,
+} from "./lib/clockSync";
+import { safeWrite } from "./lib/repoSafe";
+import { cancelShiftReminders } from "./lib/reminders";
+
 // ---------------------------------------------------------------------------
 // Keys for local persistence (DataStore analogue)
 // ---------------------------------------------------------------------------
 const SESSION_KEY = "primer_portal_session";
 const THEME_KEY = "primer_portal_theme";
-// Persists the active (open) clock-in record so the session survives a tab
-// close / page reload even when the Firebase write is slow or temporarily
-// unavailable.  Cleared atomically when the user clocks out.
-const ACTIVE_SESSION_KEY = "primer_active_session";
-
-function saveActiveSession(rec: AttendanceRecord): void {
-  try { localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(rec)); } catch { /* ignore */ }
-}
-function clearActiveSession(): void {
-  try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch { /* ignore */ }
-}
-function loadActiveSession(): AttendanceRecord | null {
-  try {
-    const raw = localStorage.getItem(ACTIVE_SESSION_KEY);
-    if (!raw) return null;
-    const rec = JSON.parse(raw) as AttendanceRecord;
-    return rec?.isClockedIn ? rec : null;
-  } catch { return null; }
-}
 
 // ---------------------------------------------------------------------------
 // Default empty profile for unauthenticated state
@@ -152,8 +147,9 @@ interface AppState {
   notifications: AppNotification[];
 
   // mutations
-  clockIn: () => void;
-  clockOut: () => void;
+  clockIn: () => Promise<void>;
+  clockOut: () => Promise<void>;
+  clockBusy: boolean;
   updateNote: (id: string, note: string) => void;
   submitLeave: (lr: Omit<LeaveRequest, "id" | "requestId" | "createdAt">) => void;
   cancelLeave: (id: string, reason: string) => void;
@@ -238,7 +234,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // (fire-and-forget so the UI stays fast; errors toast)
   const persistProfile = useCallback(
     (p: Profile) => {
-      repo.updateProfile(p.employeeId, p).catch(() => {});
+      void safeWrite("Profile sync", () => repo.updateProfile(p.employeeId, p), { retries: 2 });
     },
     [repo],
   );
@@ -260,25 +256,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ]);
       if (p) setProfile(p);
 
-      // Belt-and-suspenders: if Firebase has no open attendance record but
-      // localStorage has one (e.g. the Firebase write was temporarily
-      // unavailable when the user clocked in), restore it into React state and
-      // attempt a background sync to Firebase.
-      const hasOpenRecord = a.some((r) => r.isClockedIn);
-      if (!hasOpenRecord) {
-        const saved = loadActiveSession();
-        if (saved && saved.employeeId === empId) {
-          setAttendance([saved, ...a]);
-          // Re-attempt the Firebase write in the background.
-          repo.createAttendance(saved).catch(() => {});
-        } else {
-          setAttendance(a);
-        }
-      } else {
-        // Firebase has the real record — local backup no longer needed.
-        clearActiveSession();
-        setAttendance(a);
-      }
+      // Reconcile local active-session backup with Firebase. This handles:
+      //  - app killed before Firebase write finished
+      //  - app killed after write succeeded but before UI saw it
+      //  - clock-out write that never landed (retried in background)
+      //  - cross-user contamination (per-employee keys)
+      const reconciled = await reconcileActiveSession(repo, empId, a);
+      setAttendance(reconciled.attendance);
 
       setLeaves(l);
       setOt(o);
@@ -360,7 +344,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSession(null);
     localStorage.removeItem(SESSION_KEY);
     sessionStorage.removeItem(SESSION_KEY);
-    clearActiveSession(); // also clear any open clock-in session
+    // Per-user backups stay until a successful sync; on explicit sign-out,
+    // purge them — the user is deliberately ending their session.
+    purgeAllActiveSessions();
+    void cancelShiftReminders();
     setScreen("dashboard");
     setStack([]);
     repo.signOut().catch(() => {});
@@ -431,31 +418,69 @@ export function AppProvider({ children }: { children: ReactNode }) {
     })();
   }, [repo, hasHydrated, hydrateAll]);
 
+  // Re-reconcile the active clock session whenever the user comes back to
+  // the tab/app or the device comes back online. This catches the case
+  // where a clock-in/out write failed silently while the app was hidden.
+  useEffect(() => {
+    if (!profile?.employeeId) return;
+    const empId = profile.employeeId;
+    const run = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void (async () => {
+        try {
+          const fresh = await repo.getAttendance(empId);
+          const reconciled = await reconcileActiveSession(repo, empId, fresh);
+          setAttendance(reconciled.attendance);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn("[reconcile] background sync failed", err);
+        }
+      })();
+    };
+    document.addEventListener("visibilitychange", run);
+    window.addEventListener("online", run);
+    return () => {
+      document.removeEventListener("visibilitychange", run);
+      window.removeEventListener("online", run);
+    };
+  }, [profile?.employeeId, repo]);
+
+
   // ---- mutations ----
-  const clockIn = useCallback(() => {
+  // `clockBusy` blocks the Clock button while a write is in-flight; this
+  // prevents double-taps and React Strict Mode double-invocation from
+  // producing duplicate writes.
+  const [clockBusy, setClockBusy] = useState(false);
+
+  const clockIn = useCallback(async (): Promise<void> => {
     if (!profile) {
       toast("Please sign in first.", "error");
       return;
     }
-    const now = serverNow();
-    const nowMs = now.getTime();
-    // Guard against duplicate open attendance records.
-    // `alreadyOpen` and `newRecord` are closure variables — safe to read after
-    // `setAttendance` because the functional updater runs synchronously.
-    let alreadyOpen = false;
-    let newRecord: AttendanceRecord | null = null;
+    if (clockBusy) return;
+    const empId = profile.employeeId;
 
-    setAttendance((prev) => {
-      alreadyOpen = prev.some((r) => r.isClockedIn);
-      if (alreadyOpen) return prev;
+    // Hard guard: any existing open record (in state or in the durable
+    // backup) means the user is already clocked in.
+    const stateOpen = attendance.some(
+      (r) => r.isClockedIn && r.employeeId === empId,
+    );
+    const backup = loadActiveSession(empId);
+    if (stateOpen || (backup && backup.isClockedIn)) {
+      toast("You're already clocked in.", "info");
+      return;
+    }
+
+    setClockBusy(true);
+    try {
+      const now = serverNow();
+      const nowMs = now.getTime();
       const rec: AttendanceRecord = {
         id: newId(),
         attendanceCode: `ATT-${Math.floor(Math.random() * 9000 + 1000)}`,
-        employeeId: profile.employeeId,
+        employeeId: empId,
         dateIn: fmtDate(now),
         timeIn: fmtTime(now),
-        // clockInTs (unix ms) gives clock-out precise duration even after a
-        // long idle session where the Device/string-format times would be stale.
         clockInTs: nowMs,
         note: "",
         noteLocked: false,
@@ -466,93 +491,78 @@ export function AppProvider({ children }: { children: ReactNode }) {
         month: monthName(now),
         year: phtYear(now),
       };
-      newRecord = rec;
-      return [rec, ...prev];
-    });
 
-    if (alreadyOpen) {
-      toast("You're already clocked in.", "info");
+      // Persist the durable backup BEFORE touching React state or Firebase.
+      // If the app dies between here and the next line, hydration recovers it.
+      saveActiveSession(markPending(rec, "create"));
+
+      // Dedupe by id on insert — protects against a Strict Mode double-call.
+      setAttendance((prev) => {
+        if (prev.some((r) => r.id === rec.id)) return prev;
+        return [rec, ...prev];
+      });
+
+      // Mirror profile flag (compat only; UI reads from attendance).
+      setProfile((p) => {
+        if (!p) return p;
+        const next = { ...p, isClockedIn: true };
+        void safeWrite("Profile sync", () => repo.updateProfile(empId, next));
+        return next;
+      });
+
+      const ok = await persistAttendanceWithRetry(
+        "Clock-in",
+        "create",
+        markPending(rec, "create"),
+        repo,
+        toast,
+      );
+      if (ok) {
+        // Clear pendingOp but keep the backup until clock-out — guarantees
+        // an offline reopen still sees the active session card.
+        saveActiveSession(markPending(rec, null));
+        toast("Clocked in successfully.", "success");
+      }
+      // On failure, persistAttendanceWithRetry already toasted and left the
+      // backup with pendingOp:"create" for reconciliation to retry.
+    } finally {
+      setClockBusy(false);
+    }
+  }, [profile, toast, repo, attendance, clockBusy]);
+
+  const clockOut = useCallback(async (): Promise<void> => {
+    if (!profile) return;
+    if (clockBusy) return;
+    const empId = profile.employeeId;
+
+    // Find the open record from state or recover it from the backup.
+    let openRec = attendance.find(
+      (r) => r.isClockedIn && r.employeeId === empId,
+    );
+    if (!openRec) {
+      const backup = loadActiveSession(empId);
+      if (backup && backup.isClockedIn) openRec = backup;
+    }
+    if (!openRec) {
+      toast("You're not currently clocked in.", "info");
       return;
     }
 
-    // Persist the session to localStorage FIRST so the active session card
-    // survives a tab close / page reload regardless of the Firebase outcome.
-    // hydrateAll will restore it and retry the write on next app open.
-    if (newRecord) saveActiveSession(newRecord);
+    setClockBusy(true);
+    try {
+      const now = serverNow();
+      const nowMs = now.getTime();
+      const dateOut = fmtDate(now);
+      const timeOut = fmtTime(now);
 
-    // Write to Firebase outside the state updater to avoid the side-effect
-    // being invoked twice in React Strict Mode / Concurrent Mode.
-    setTimeout(() => {
-      if (newRecord) {
-        repo
-          .createAttendance(newRecord)
-          .then(() => {
-            // Firebase confirmed — backup is now redundant but kept until
-            // clock-out clears it, so offline reopens still show the session.
-          })
-          .catch(() => {
-            // Firebase write failed but the record is already in React state
-            // and localStorage.  The user can continue working; hydrateAll
-            // will retry the write on the next app open.
-            const offline = !navigator.onLine;
-            toast(
-              offline
-                ? "You're offline — clock-in saved locally and will sync when you reconnect."
-                : "Network error — clock-in saved locally. Check your connection.",
-              "error",
-            );
-          });
-        newRecord = null;
-      }
-    }, 0);
-
-    setProfile((p) => {
-      if (!p) return p;
-      const next = { ...p, isClockedIn: true };
-      persistProfile(next);
-      return next;
-    });
-    toast("Clocked in successfully.", "success");
-  }, [profile, toast, repo, persistProfile]);
-
-
-  const clockOut = useCallback(() => {
-    if (!profile) return;
-    const now = serverNow();
-    const nowMs = now.getTime();
-    const dateOut = fmtDate(now);
-    const timeOut = fmtTime(now);
-    const empId = profile.employeeId;
-
-    let updatedRecord: AttendanceRecord | null = null;
-
-    setAttendance((prev) => {
-      // If React state lost the open record (e.g. after a hot-reload or stale
-      // state from a long idle session), recover it from localStorage before
-      // computing the clock-out.  This is a read-only call so calling it twice
-      // in Strict Mode is safe.
-      let working = prev;
-      if (!prev.some((r) => r.isClockedIn)) {
-        const saved = loadActiveSession();
-        if (saved && saved.employeeId === empId) {
-          working = [saved, ...prev];
-        }
-      }
-
-      const idx = working.findIndex((r) => r.isClockedIn);
-      if (idx === -1) return prev; // genuinely nothing to close
-
-      const r = working[idx];
-
-      // Prefer unix-ms precision when clockInTs is stored; fall back to
-      // string-parsing for legacy records that pre-date the field.
+      // Canonical: derive from stored clockInTs. Legacy string-parse fallback.
       const totalHours =
-        r.clockInTs != null
-          ? Math.max(0, Math.round(((nowMs - r.clockInTs) / 3.6e6) * 100) / 100)
-          : computeTotalHours(r.dateIn, r.timeIn, dateOut, timeOut);
+        openRec.clockInTs != null
+          ? Math.max(0, Math.round(((nowMs - openRec.clockInTs) / 3.6e6) * 100) / 100)
+          : computeTotalHours(openRec.dateIn, openRec.timeIn, dateOut, timeOut);
 
       const updated: AttendanceRecord = {
-        ...r,
+        ...openRec,
         dateOut,
         timeOut,
         totalHours,
@@ -560,42 +570,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
         status: "Complete",
         clockOutTs: nowMs,
       };
-      updatedRecord = updated;
-      const copy = [...working];
-      copy[idx] = updated;
-      return copy;
-    });
 
-    // Clear the local backup immediately — the session is now closed.
-    clearActiveSession();
+      // Update the backup to the closed record FIRST and mark pendingOp:"update".
+      // We deliberately do NOT clear it here — only after a successful sync,
+      // so a crash mid-finalization is recoverable.
+      saveActiveSession(markPending(updated, "update"));
 
-    // Firebase write outside the updater — safe from double-invocation in
-    // Strict Mode because `updatedRecord` is nulled after the first call.
-    setTimeout(() => {
-      if (updatedRecord) {
-        repo
-          .updateAttendance(updatedRecord.id, updatedRecord)
-          .catch(() => {
-            const offline = !navigator.onLine;
-            toast(
-              offline
-                ? "You're offline — clock-out will retry when you reconnect."
-                : "Network error — clock-out may not have saved. Check your connection.",
-              "error",
-            );
-          });
-        updatedRecord = null;
+      setAttendance((prev) => {
+        const idx = prev.findIndex((r) => r.id === updated.id);
+        if (idx === -1) return [updated, ...prev];
+        const copy = [...prev];
+        copy[idx] = updated;
+        return copy;
+      });
+
+      setProfile((p) => {
+        if (!p) return p;
+        const next = { ...p, isClockedIn: false };
+        void safeWrite("Profile sync", () => repo.updateProfile(empId, next));
+        return next;
+      });
+
+      const ok = await persistAttendanceWithRetry(
+        "Clock-out",
+        "update",
+        markPending(updated, "update"),
+        repo,
+        toast,
+      );
+      if (ok) {
+        // Finalized — backup no longer needed.
+        clearActiveSessionLS(empId);
+        toast("Clocked out. Total hours saved.", "success");
       }
-    }, 0);
-
-    setProfile((p) => {
-      if (!p) return p;
-      const next = { ...p, isClockedIn: false };
-      persistProfile(next);
-      return next;
-    });
-    toast("Clocked out. Total hours saved.", "success");
-  }, [profile, toast, repo, persistProfile]);
+      // On failure: backup remains with pendingOp:"update"; reconciliation
+      // retries with the same id, so no duplicate record is created.
+    } finally {
+      setClockBusy(false);
+    }
+  }, [profile, toast, repo, attendance, clockBusy]);
 
   const updateNote = useCallback(
     (id: string, note: string) => {
@@ -605,7 +618,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           r.id === id ? { ...r, note, noteLastEditedTs: ts } : r,
         ),
       );
-      repo.updateAttendance(id, { note, noteLastEditedTs: ts }).catch(() => {});
+      void safeWrite(
+        "Note save",
+        () => repo.updateAttendance(id, { note, noteLastEditedTs: ts }),
+        { critical: true, retries: 2, toast },
+      );
       toast("Note saved.", "success");
     },
     [toast, repo],
@@ -626,7 +643,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         status,
       };
       setLeaves((prev) => [full, ...prev]);
-      repo.createLeave(full).catch(() => {});
+      void safeWrite("Leave request", () => repo.createLeave(full), { critical: true, retries: 2, toast });
 
       // Credit handling
       setProfile((p) => {
@@ -674,15 +691,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
             : l,
         );
       });
-      repo.updateLeave(id, { status: "Cancelled", cancellationReason: reason }).catch(() => {});
+      void safeWrite("Cancel leave", () => repo.updateLeave(id, { status: "Cancelled", cancellationReason: reason }), { critical: true, retries: 2, toast });
       if (profile) {
-        repo
-          .deleteCoverageByFilter({
+        void safeWrite("Coverage cleanup", () => repo.deleteCoverageByFilter({
             coverageType: "Leave",
             requesterId: profile.employeeId,
             coverageStatus: "Available",
-          })
-          .catch(() => {});
+          }), { retries: 2 });
         setCoverage((prev) =>
           prev.filter(
             (c) =>
@@ -708,7 +723,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
       };
       setOt((prev) => [full, ...prev]);
-      repo.createOtRequest(full).catch(() => {});
+      void safeWrite("OT request", () => repo.createOtRequest(full), { critical: true, retries: 2, toast });
       toast("OT request submitted.", "success");
     },
     [toast, repo],
@@ -723,7 +738,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             : o,
         ),
       );
-      repo.updateOtRequest(id, { status: "Cancelled", cancellationReason: reason }).catch(() => {});
+      void safeWrite("Cancel OT", () => repo.updateOtRequest(id, { status: "Cancelled", cancellationReason: reason }), { critical: true, retries: 2, toast });
       toast("OT request cancelled.", "success");
     },
     [toast, repo],
@@ -738,7 +753,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
       };
       setCoverage((prev) => [full, ...prev]);
-      repo.createCoverage(full).catch(() => {});
+      void safeWrite("Coverage request", () => repo.createCoverage(full), { critical: true, retries: 2, toast });
       toast("Tech issue coverage request submitted.", "success");
     },
     [toast, repo],
@@ -760,13 +775,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           };
         }),
       );
-      repo
-        .updateCoverage(id, {
+      void safeWrite("Coverage update", () => repo.updateCoverage(id, {
           coverageStatus: "Ongoing",
           coveredById: profile.employeeId,
           takenBy: profile.fullName,
-        })
-        .catch(() => {});
+        }), { critical: true, retries: 2, toast });
       toast("Coverage taken over. Status set to Ongoing.", "success");
     },
     [profile, toast, repo],
@@ -787,14 +800,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
             : c,
         ),
       );
-      repo
-        .updateCoverage(id, {
+      void safeWrite("Coverage update", () => repo.updateCoverage(id, {
           coverageStatus: "Available",
           coveredById: undefined,
           takenBy: undefined,
           coveredHours: undefined,
-        })
-        .catch(() => {});
+        }), { critical: true, retries: 2, toast });
       toast("Coverage cancelled and returned to Available.", "info");
     },
     [toast, repo],
@@ -810,7 +821,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               : l,
           ),
         );
-        repo.updateLeave(id, { status: "Change Pending", leaveDate: [newDate] }).catch(() => {});
+        void safeWrite("Change leave date", () => repo.updateLeave(id, { status: "Change Pending", leaveDate: [newDate] }), { critical: true, retries: 2, toast });
       } else {
         setOt((prev) =>
           prev.map((o) =>
@@ -819,7 +830,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               : o,
           ),
         );
-        repo.updateOtRequest(id, { status: "Change Pending", otDate: newDate }).catch(() => {});
+        void safeWrite("Change OT date", () => repo.updateOtRequest(id, { status: "Change Pending", otDate: newDate }), { critical: true, retries: 2, toast });
       }
       toast("Change request submitted (Change Pending).", "success");
     },
@@ -845,7 +856,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setNotifications((prev) =>
         prev.map((n) => (n.id === id ? { ...n, readAt } : n)),
       );
-      repo.updateNotification(id, { readAt }).catch(() => {});
+      void safeWrite("Notification read", () => repo.updateNotification(id, { readAt }));
     },
     [repo],
   );
@@ -874,6 +885,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       notifications,
       clockIn,
       clockOut,
+      clockBusy,
       updateNote,
       submitLeave,
       cancelLeave,
@@ -892,7 +904,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [
       session, signIn, signInWithEmployeeId, signOut, dark, toggleDark, screen, navigate, back, stack.length,
       profile, attendance, leaves, ot, coverage, infractions, holidays, notifications,
-      clockIn, clockOut, updateNote, submitLeave, cancelLeave, submitOt, cancelOt,
+      clockIn, clockOut, clockBusy, updateNote, submitLeave, cancelLeave, submitOt, cancelOt,
       submitTechCoverage, takeoverCoverage, cancelCoverage, changeLeaveDate, updateProfile,
       markNotificationRead, toasts, toast, hasHydrated,
     ],
