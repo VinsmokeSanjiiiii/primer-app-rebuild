@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "build:apk": "pnpm build && pnpm exec cap sync && cmd /c \"set JAVA_HOME=C:\\Program Files\\Android\\Android Studio\\jbr && cd android && .\\gradlew assembleDebug\""
+    "build:apk": "pnpm build && pnpm exec cap sync android && cmd /c \"set JAVA_HOME=C:\\Program Files\\Android\\Android Studio\\jbr&& cd android && .\\gradlew assembleDebug\""
   },
   "dependencies": {
     "@capacitor/android": "^8.4.0",
