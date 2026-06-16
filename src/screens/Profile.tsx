@@ -121,9 +121,7 @@ export function Profile() {
         {/* Shortcuts */}
         <SectionTitle>Shortcuts</SectionTitle>
         <div className="space-y-2">
-          <NavRow icon="swap" label="Coverage board" onClick={() => navigate("coverage")} />
           <NavRow icon="calendar" label="Change leave/OT date" onClick={() => navigate("change-leave")} />
-          <NavRow icon="inbox" label="Coverage records" onClick={() => navigate("coverage-records")} />
           <NavRow icon="alert" label="Infractions" onClick={() => navigate("infractions")} />
           <NavRow icon="lock" label="Change password" onClick={() => setPwOpen(true)} />
           <NavRow icon="logout" label="Log out" onClick={() => setLogoutOpen(true)} danger />
