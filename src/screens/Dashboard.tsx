@@ -4,12 +4,27 @@ import { Card, Avatar, Badge, Button, Dialog, Field, SectionTitle } from "../com
 import { Icon, type IconName } from "../components/Icon";
 import { tenureFrom } from "../lib/date";
 
+const SEEN_INFRACTIONS_KEY = "primer_seen_infractions";
+
+function loadSeenIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(SEEN_INFRACTIONS_KEY);
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch { /* ignore */ }
+  return new Set();
+}
+
 export function Dashboard() {
   const { profile, leaves, ot, infractions, navigate, notifications } = useApp();
   const [reqOpen, setReqOpen] = useState(false);
   const unread = notifications.filter((n) => !n.readAt).length;
   const userInfractions = infractions.filter((i) => i.employeeId === profile.employeeId);
-  const infractionCount = userInfractions.length;
+
+  // Badge shows only *unseen* infractions — Infractions screen writes seen IDs to localStorage
+  const unseenInfractionCount = (() => {
+    const seen = loadSeenIds();
+    return userInfractions.filter((i) => !seen.has(i.id)).length;
+  })();
 
   const pending = [
     ...leaves
@@ -101,7 +116,7 @@ export function Dashboard() {
         <QuickAction icon="plus" label="Request" onClick={() => setReqOpen(true)} />
         <QuickAction icon="clock" label="Clock" onClick={() => navigate("clock")} />
         <QuickAction icon="swap" label="Coverage" onClick={() => navigate("coverage")} />
-        <QuickAction icon="alert" label="Infractions" onClick={() => navigate("infractions")} badge={infractionCount} />
+        <QuickAction icon="alert" label="Infractions" onClick={() => navigate("infractions")} badge={unseenInfractionCount} />
       </div>
 
       {/* Profile summary */}

@@ -2,11 +2,8 @@
 // the M/d/yyyy date format with HH:mm time. Server time is always trusted over
 // device time.
 //
-// The Firebase Realtime Database exposes the server-vs-local clock skew
-// at `/.info/serverTimeOffset`.  The `setServerTimeOffsetMs()` helper
-// below lets the app store cache that value so every read of
-// `serverNow()` produces a server-aligned timestamp even when the
-// device clock is wrong.
+// ALL formatting uses Intl.DateTimeFormat with timeZone: "Asia/Manila" so the
+// displayed times are correct regardless of the user's device timezone setting.
 
 export const TIMEZONE = "Asia/Manila";
 
@@ -20,21 +17,44 @@ export function getServerTimeOffsetMs(): number {
   return _serverOffsetMs;
 }
 
-/** Format a Date as M/d/yyyy (no leading zeros), the legacy primary format. */
+/**
+ * Format a Date as M/d/yyyy in Asia/Manila timezone (no leading zeros).
+ * This is the legacy primary format used throughout the app.
+ */
 export function fmtDate(d: Date): string {
-  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TIMEZONE,
+    month: "numeric",
+    day: "numeric",
+    year: "numeric",
+  }).formatToParts(d);
+  const p: Record<string, string> = {};
+  for (const part of parts) p[part.type] = part.value;
+  return `${p.month}/${p.day}/${p.year}`;
 }
 
-/** Format a Date as HH:mm (24h). */
+/**
+ * Format a Date as HH:mm (24h) in Asia/Manila timezone.
+ */
 export function fmtTime(d: Date): string {
-  return `${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes(),
-  ).padStart(2, "0")}`;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TIMEZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const p: Record<string, string> = {};
+  for (const part of parts) p[part.type] = part.value;
+  // hour12:false may return "24" at midnight in some runtimes; normalise to "00"
+  const h = p.hour === "24" ? "00" : (p.hour ?? "00");
+  return `${h}:${p.minute ?? "00"}`;
 }
 
-/** Parse a M/d/yyyy string back to a Date (local midnight). */
+/** Parse a M/d/yyyy (or "M/d/yyyy HH:mm:ss …") string back to a Date at local midnight. */
 export function parseDate(s: string): Date {
-  const [m, d, y] = s.split("/").map(Number);
+  const datePart = s.split(" ")[0]; // drop any time component
+  const [m, d, y] = datePart.split("/").map(Number);
+  if (!y || isNaN(y)) return new Date(0);
   return new Date(y, m - 1, d);
 }
 
@@ -45,28 +65,33 @@ export const MONTHS = [
 
 export const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+/** Month name (long) for a Date in Asia/Manila timezone. */
 export function monthName(d: Date): string {
-  return MONTHS[d.getMonth()];
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: TIMEZONE,
+    month: "long",
+  }).format(d);
+}
+
+/** Full numeric year in Asia/Manila timezone. */
+export function phtYear(d: Date): number {
+  return Number(
+    new Intl.DateTimeFormat("en-US", { timeZone: TIMEZONE, year: "numeric" }).format(d),
+  );
 }
 
 /**
  * Server-anchored "now" timestamp.
  *
- * Returns `Date.now() + serverTimeOffset` so the value is aligned
- * with the Firebase RTDB server clock when an offset has been
- * cached.  Falls back to local time when no offset has been observed
- * yet (e.g. on first launch before the RTDB ping completes).
+ * Returns a Date whose .getTime() is aligned with the Firebase RTDB server
+ * clock (via the cached /.info/serverTimeOffset offset).  Use fmtDate /
+ * fmtTime to display it in Asia/Manila; do NOT rely on .getHours() etc.
+ * which depend on the local device timezone.
  */
 export function serverNow(): Date {
   return new Date(Date.now() + _serverOffsetMs);
 }
 
-/**
- * Returns the milliseconds since the Unix epoch as seen by the server
- * (after applying the cached server-time offset).  Use this in
- * `timestamp` calculations and for storage of `clock_out_ts` /
- * `note_last_edited_ts` so the value is consistent across clients.
- */
 export function serverNowMs(): number {
   return Date.now() + _serverOffsetMs;
 }
@@ -77,7 +102,17 @@ export function deviceTimeIsSafe(thresholdMinutes = 5): boolean {
   return skewMs <= thresholdMinutes * 60 * 1000;
 }
 
-/** Same calendar day. */
+/** Current month name (long) based on server time in Asia/Manila. e.g. "June" */
+export function currentServerMonth(): string {
+  return monthName(serverNow());
+}
+
+/** Current 4-digit year based on server time in Asia/Manila. */
+export function currentServerYear(): number {
+  return phtYear(serverNow());
+}
+
+/** Same calendar day (local timezone comparison, fine for date range filters). */
 export function sameDay(a: Date, b: Date): boolean {
   return (
     a.getFullYear() === b.getFullYear() &&
@@ -113,7 +148,10 @@ export function buildMonthGrid(year: number, month: number): (Date | null)[] {
   return cells;
 }
 
-/** Compute total hours between a clock-in and clock-out. */
+/**
+ * Compute total hours between a clock-in and clock-out using string-parsed dates.
+ * Prefer using Unix-ms timestamps (clockInTs) when available for precision.
+ */
 export function computeTotalHours(
   dateIn: string,
   timeIn: string,
@@ -122,12 +160,16 @@ export function computeTotalHours(
 ): number {
   const a = combine(dateIn, timeIn);
   const b = combine(dateOut, timeOut);
+  if (isNaN(a.getTime()) || isNaN(b.getTime())) return 0;
   return Math.max(0, Math.round(((b.getTime() - a.getTime()) / 3.6e6) * 100) / 100);
 }
 
 function combine(dateStr: string, timeStr: string): Date {
   const d = parseDate(dateStr);
-  const [h, m] = timeStr.split(":").map(Number);
+  const parts = timeStr.split(":");
+  const h = Number(parts[0] ?? 0);
+  const m = Number(parts[1] ?? 0);
+  if (isNaN(h) || isNaN(m)) return new Date(NaN);
   d.setHours(h, m, 0, 0);
   return d;
 }

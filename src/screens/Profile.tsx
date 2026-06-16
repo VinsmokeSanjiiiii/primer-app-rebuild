@@ -129,7 +129,7 @@ export function Profile() {
           <NavRow icon="logout" label="Log out" onClick={() => setLogoutOpen(true)} danger />
         </div>
 
-        <p className="pb-2 text-center text-xs text-slate-400">PrimerHR · Employee Self-Service</p>
+        <p className="pb-2 text-center text-xs text-slate-400">Primer Communications · Employee Self-Service</p>
       </div>
 
       {/* Notes dialog */}

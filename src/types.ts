@@ -68,13 +68,15 @@ export interface AttendanceRecord {
   id: string;
   attendanceCode: string;
   employeeId: string;
-  dateIn: string; // M/d/yyyy
-  timeIn: string; // HH:mm
+  dateIn: string; // M/d/yyyy (Asia/Manila)
+  timeIn: string; // HH:mm  (Asia/Manila)
   dateOut?: string;
   timeOut?: string;
   totalHours?: number;
   note: string;
   noteLocked: boolean;
+  /** Unix-ms timestamp at clock-in (server time). Used for precise duration. */
+  clockInTs?: number;
   clockOutTs?: number;
   noteLastEditedTs?: number;
   minsLate: number;
@@ -171,6 +173,7 @@ export interface Holiday {
   id: string;
   hdate: string; // M/d/yyyy
   name: string;
+  htype?: string; // HType from DB: "Regular", "Special", etc.
 }
 
 export interface AppNotification {
