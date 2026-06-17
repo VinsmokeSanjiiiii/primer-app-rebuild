@@ -112,31 +112,28 @@ export function Clock() {
           )}
         </Card>
 
-        {/* Status banners */}
-        {/* Connectivity */}
+        {/* Combined connection + server-time status banner */}
         <div
           className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm ${
-            isOnline
-              ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
-              : "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300"
+            !isOnline
+              ? "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300"
+              : !safe
+                ? "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300"
+                : "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
           }`}
         >
-          <Icon name={isOnline ? "wifi" : "wifi-off"} size={16} />
-          {isOnline ? "Connected to server" : "Unable to connect to the server — clock actions blocked"}
-        </div>
-
-        {/* Server-time safety */}
-        <div
-          className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm ${
-            safe
-              ? "bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300"
-              : "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300"
-          }`}
-        >
-          <Icon name={safe ? "shield" : "alert"} size={16} />
-          {safe
-            ? `Server time verified (${skewMs} ms offset)`
-            : `Device clock offset by ${Math.round(skewMs / 1000)}s — clock actions blocked`}
+          <Icon
+            name={!isOnline ? "wifi-off" : !safe ? "alert" : "shield"}
+            size={16}
+            className="shrink-0"
+          />
+          <span>
+            {!isOnline
+              ? "No connection — clock actions blocked"
+              : !safe
+                ? `Clock skewed by ${Math.round(skewMs / 1000)}s — clock actions blocked`
+                : `Connected · Server time verified`}
+          </span>
         </div>
 
         {/* Active session card — visible whenever there is an open record,

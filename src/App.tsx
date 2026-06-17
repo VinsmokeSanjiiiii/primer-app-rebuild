@@ -42,14 +42,25 @@ const SCREENS: Record<ScreenId, () => React.ReactElement> = {
 };
 
 function Shell() {
-  const { screen, navigate, isAuthed, toasts } = useApp();
+  const { screen, navigate, isAuthed, toasts, hasHydrated } = useApp();
   const Screen = SCREENS[screen];
   const showNav = (["dashboard", "attendance", "requests", "profile"] as ScreenId[]).includes(screen);
 
   return (
     <div className="flex h-full flex-col bg-slate-50 dark:bg-slate-950">
       <div className="flex-1 overflow-y-auto">
-        {isAuthed ? <Screen /> : <Login />}
+        {!hasHydrated ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="flex flex-col items-center gap-3">
+              <div className="h-10 w-10 animate-spin rounded-full border-4 border-indigo-200 border-t-indigo-600" />
+              <p className="text-sm font-semibold text-slate-400">Loading…</p>
+            </div>
+          </div>
+        ) : isAuthed ? (
+          <Screen />
+        ) : (
+          <Login />
+        )}
       </div>
 
       {/* Bottom nav */}
@@ -107,7 +118,7 @@ function Root() {
     <div className={dark ? "dark" : ""}>
       <div className="flex min-h-screen items-center justify-center bg-slate-200 p-0 sm:p-6 dark:bg-slate-900">
         {/* Phone frame */}
-        <div className="relative h-screen w-full overflow-hidden bg-slate-50 shadow-2xl sm:h-[860px] sm:max-w-[420px] sm:rounded-[2.5rem] sm:ring-8 sm:ring-slate-900 dark:bg-slate-950">
+        <div className="relative h-[100dvh] w-full overflow-hidden bg-slate-50 shadow-2xl sm:h-[860px] sm:max-w-[420px] sm:rounded-[2.5rem] sm:ring-8 sm:ring-slate-900 dark:bg-slate-950">
           {!booted ? (
             <Splash onDone={() => setBooted(true)} />
           ) : (
