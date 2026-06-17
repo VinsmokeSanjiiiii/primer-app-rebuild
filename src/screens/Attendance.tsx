@@ -27,7 +27,11 @@ export function Attendance() {
         const d = parseDate(r.dateIn);
         return d >= f && d <= t;
       })
-      .sort((a, b) => parseDate(b.dateIn).getTime() - parseDate(a.dateIn).getTime());
+      .sort((a, b) => {
+        const dateDiff = parseDate(b.dateIn).getTime() - parseDate(a.dateIn).getTime();
+        if (dateDiff !== 0) return dateDiff;
+        return (b.clockInTs ?? 0) - (a.clockInTs ?? 0);
+      });
   }, [attendance, from, to]);
 
   const totalHours = filtered.reduce((s, r) => s + (r.totalHours ?? 0), 0);

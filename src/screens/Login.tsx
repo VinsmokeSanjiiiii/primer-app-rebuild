@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApp } from "../store";
 import { Button, TextField, Spinner, Dialog } from "../components/ui";
 import { Icon } from "../components/Icon";
@@ -13,23 +13,27 @@ import { requestPasswordReset, verifyOTP, resetPassword } from "../lib/forgot-pa
 
 type ForgotStep = "email" | "otp" | "reset" | "done";
 
+const REMEMBER_EMAIL_KEY = "primer_remembered_email";
+
 export function Login() {
   const { signIn, signInWithEmployeeId, toast } = useApp();
-  // Intentionally empty - no dummy prefill
-  const [email, setEmail] = useState("");
+
+  const [email, setEmail] = useState(() => {
+    try { return localStorage.getItem(REMEMBER_EMAIL_KEY) ?? ""; } catch { return ""; }
+  });
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
-  const [remember, setRemember] = useState(true);
+  const [remember, setRemember] = useState(() => {
+    try { return !!localStorage.getItem(REMEMBER_EMAIL_KEY); } catch { return true; }
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [biometric, setBiometric] = useState(false);
 
-  // Biometric capability detection
   const [bioSupported, setBioSupported] = useState(false);
   const [bioEnrolled, setBioEnrolled] = useState(false);
   const [bioEmail, setBioEmail] = useState<string | null>(null);
 
-  // Forgot-password OTP flow
   const [forgotOpen, setForgotOpen] = useState(false);
   const [forgotStep, setForgotStep] = useState<ForgotStep>("email");
   const [forgotEmail, setForgotEmail] = useState("");
@@ -41,14 +45,14 @@ export function Login() {
   const [forgotVerifyToken, setForgotVerifyToken] = useState<string | null>(null);
   const [forgotDevOtp, setForgotDevOtp] = useState<string | null>(null);
 
-  // Enrollment prompt after first successful sign-in on a device
-  // that supports biometrics.
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [pendingProfile, setPendingProfile] = useState<{
     employeeId: string;
     email: string;
     displayName: string;
   } | null>(null);
+
+  const passwordRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,51 +62,68 @@ export function Login() {
       setBioSupported(available);
       const enrolled = hasEnrolledBiometric();
       setBioEnrolled(enrolled);
-      setBioEmail(getEnrolledEmployeeEmail());
-      if (enrolled && available) {
-        const e = getEnrolledEmployeeEmail();
-        if (e) setEmail(e);
+      const enrolledEmail = getEnrolledEmployeeEmail();
+      setBioEmail(enrolledEmail);
+      if (enrolled && available && enrolledEmail && !email) {
+        setEmail(enrolledEmail);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
+
+  const validateEmail = (e: string) => e.includes("@") && e.includes(".");
 
   const submit = async () => {
     setError("");
-    if (!email.includes("@") || password.length < 6) {
-      setError("Enter a valid email and a password of at least 6 characters.");
+    const trimmedEmail = email.trim();
+    if (!validateEmail(trimmedEmail)) {
+      setError("Enter a valid email address.");
+      return;
+    }
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters.");
       return;
     }
     setLoading(true);
     try {
-      const result = await signIn(email, password, remember);
+      if (remember) {
+        try { localStorage.setItem(REMEMBER_EMAIL_KEY, trimmedEmail); } catch { /* ignore */ }
+      } else {
+        try { localStorage.removeItem(REMEMBER_EMAIL_KEY); } catch { /* ignore */ }
+      }
+
+      const result = await signIn(trimmedEmail, password, remember);
       if (!result.success) {
-        setError(result.error || "Sign in failed.");
+        setError(result.error || "Sign in failed. Check your credentials.");
         toast("Sign in failed — check your credentials.", "error");
-      } else if (
-        bioSupported &&
-        !bioEnrolled &&
-        result.employeeId
-      ) {
-        // Offer biometric enrollment after a successful login.
+      } else if (bioSupported && !bioEnrolled && result.employeeId) {
         setPendingProfile({
           employeeId: result.employeeId,
-          email,
-          displayName: result.fullName ?? email,
+          email: trimmedEmail,
+          displayName: result.fullName ?? trimmedEmail,
         });
         setEnrollOpen(true);
       }
     } catch (e) {
-      setError(
-        e instanceof Error
-          ? `Network error: ${e.message}`
-          : "Network error during sign in. Please retry.",
-      );
+      const msg = e instanceof Error ? `Network error: ${e.message}` : "Network error. Please retry.";
+      setError(msg);
       toast("Network error during sign in.", "error");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleEmailKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      passwordRef.current?.focus();
+    }
+  };
+
+  const handlePasswordKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void submit();
     }
   };
 
@@ -122,10 +143,7 @@ export function Login() {
         toast(result.error || "Biometric unlock failed.", "error");
       }
     } catch (e) {
-      const msg =
-        e instanceof Error
-          ? `Network error: ${e.message}`
-          : "Network error during biometric unlock.";
+      const msg = e instanceof Error ? `Network error: ${e.message}` : "Network error during biometric unlock.";
       setError(msg);
       toast(msg, "error");
     } finally {
@@ -148,7 +166,7 @@ export function Login() {
   };
 
   const openForgotDialog = () => {
-    setForgotEmail(email);
+    setForgotEmail(email.trim());
     setForgotStep("email");
     setForgotOtp("");
     setForgotNewPassword("");
@@ -167,9 +185,14 @@ export function Login() {
 
   const handleRequestOtp = async () => {
     setForgotError("");
+    const target = forgotEmail.trim();
+    if (!validateEmail(target)) {
+      setForgotError("Enter a valid email address.");
+      return;
+    }
     setForgotSending(true);
     try {
-      const result = await requestPasswordReset(forgotEmail || email);
+      const result = await requestPasswordReset(target);
       if (result.ok) {
         setForgotStep("otp");
         setForgotVerifyToken(result.verifyToken ?? null);
@@ -184,18 +207,19 @@ export function Login() {
 
   const handleVerifyOtp = async () => {
     setForgotError("");
-    if (!forgotOtp || forgotOtp.length !== 6 || !/^\d{6}$/.test(forgotOtp)) {
+    const code = forgotOtp.trim();
+    if (!code || code.length !== 6 || !/^\d{6}$/.test(code)) {
       setForgotError("Enter the 6-digit code sent to your email.");
       return;
     }
     setForgotSending(true);
     try {
-      const result = await verifyOTP(forgotEmail || email, forgotOtp);
+      const result = await verifyOTP(forgotEmail.trim(), code);
       if (result.ok) {
         setForgotVerifyToken(result.verifyToken ?? null);
         setForgotStep("reset");
       } else {
-        setForgotError(result.error ?? "Invalid OTP.");
+        setForgotError(result.error ?? "Invalid or expired code.");
       }
     } finally {
       setForgotSending(false);
@@ -218,11 +242,7 @@ export function Login() {
     }
     setForgotSending(true);
     try {
-      const result = await resetPassword(
-        forgotEmail || email,
-        forgotNewPassword,
-        forgotVerifyToken,
-      );
+      const result = await resetPassword(forgotEmail.trim(), forgotNewPassword, forgotVerifyToken);
       if (result.ok) {
         setForgotStep("done");
         toast("Password reset successful.", "success");
@@ -234,6 +254,12 @@ export function Login() {
     }
   };
 
+  const forgotTitle =
+    forgotStep === "email" ? "Reset your password"
+    : forgotStep === "otp" ? "Enter verification code"
+    : forgotStep === "reset" ? "Create new password"
+    : "Password reset";
+
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-gradient-to-b from-indigo-50 to-white px-6 pb-8 pt-12 dark:from-slate-900 dark:to-slate-950">
       <div className="mb-8 flex flex-col items-center gap-3">
@@ -242,30 +268,33 @@ export function Login() {
         </div>
         <div className="text-center">
           <h1 className="text-2xl font-black text-slate-900 dark:text-white">Welcome back</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Sign in to Primer Communications
-          </p>
+          <p className="text-sm text-slate-500 dark:text-slate-400">Sign in to Primer Communications</p>
         </div>
       </div>
 
       <div className="space-y-4">
-        <TextField
-          label="Email"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="you@primer.com"
-          autoComplete="username"
-        />
         <div>
-          <span className="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">
-            Password
-          </span>
+          <span className="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">Email</span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={handleEmailKeyDown}
+            placeholder="you@primer.com"
+            autoComplete="username"
+            className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-white/15 dark:bg-slate-900/50 dark:text-white dark:placeholder:text-slate-500"
+          />
+        </div>
+
+        <div>
+          <span className="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">Password</span>
           <div className="relative">
             <input
+              ref={passwordRef}
               type={show ? "text" : "password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={handlePasswordKeyDown}
               placeholder="Enter your password"
               autoComplete="current-password"
               className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 pr-11 text-sm text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-white/15 dark:bg-slate-900/50 dark:text-white"
@@ -286,7 +315,12 @@ export function Login() {
             <input
               type="checkbox"
               checked={remember}
-              onChange={(e) => setRemember(e.target.checked)}
+              onChange={(e) => {
+                setRemember(e.target.checked);
+                if (!e.target.checked) {
+                  try { localStorage.removeItem(REMEMBER_EMAIL_KEY); } catch { /* ignore */ }
+                }
+              }}
               className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
             />
             Remember me
@@ -309,7 +343,7 @@ export function Login() {
 
         <Button full onClick={submit} disabled={loading}>
           {loading ? <Spinner size={18} /> : <Icon name="lock" size={18} />}
-          {loading ? "Verifying..." : "Sign in"}
+          {loading ? "Verifying…" : "Sign in"}
         </Button>
 
         {bioSupported && bioEnrolled && (
@@ -320,21 +354,12 @@ export function Login() {
             className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60 dark:border-white/15 dark:text-slate-200 dark:hover:bg-white/5"
           >
             <Icon name="fingerprint" size={18} />
-            {biometric
-              ? "Authenticating..."
-              : bioEmail
-                ? `Unlock as ${bioEmail}`
-                : "Unlock with biometrics"}
+            {biometric ? "Authenticating…" : bioEmail ? `Unlock as ${bioEmail}` : "Unlock with biometrics"}
           </button>
         )}
         {bioSupported && !bioEnrolled && (
           <p className="text-center text-xs text-slate-400">
             Sign in once to enable biometric unlock on this device.
-          </p>
-        )}
-        {!bioSupported && (
-          <p className="text-center text-xs text-slate-400">
-            Biometric unlock is unavailable on this device.
           </p>
         )}
       </div>
@@ -344,44 +369,30 @@ export function Login() {
           <Icon name="shield" size={14} /> Secured by Firebase + Platform biometrics
         </p>
         <p className="mt-1">
-          Accounts are stored in the Primer Realtime Database. Biometric unlock
-          uses your device&apos;s platform authenticator (Face ID, fingerprint,
-          Windows Hello, etc.).
+          Accounts are stored in the Primer Realtime Database. Biometric unlock uses your
+          device&apos;s platform authenticator (Face ID, fingerprint, Windows Hello, etc.).
         </p>
       </div>
 
       {/* Forgot password OTP dialog */}
-      <Dialog
-        open={forgotOpen}
-        onClose={closeForgotDialog}
-        title={
-          forgotStep === "email"
-            ? "Reset your password"
-            : forgotStep === "otp"
-              ? "Enter verification code"
-              : forgotStep === "reset"
-                ? "Create new password"
-                : "Password reset"
-        }
+      <Dialog open={forgotOpen} onClose={closeForgotDialog} title={forgotTitle}
         footer={
           forgotStep === "done" ? (
-            <Button full onClick={closeForgotDialog}>
-              Done
-            </Button>
+            <Button full onClick={closeForgotDialog}>Done</Button>
           ) : forgotStep === "email" ? (
-            <Button full onClick={handleRequestOtp} disabled={forgotSending}>
+            <Button full onClick={handleRequestOtp} disabled={forgotSending || !validateEmail(forgotEmail.trim())}>
               {forgotSending ? <Spinner size={18} /> : <Icon name="lock" size={18} />}
-              {forgotSending ? "Sending..." : "Send verification code"}
+              {forgotSending ? "Sending…" : "Send verification code"}
             </Button>
           ) : forgotStep === "otp" ? (
-            <Button full onClick={handleVerifyOtp} disabled={forgotSending}>
+            <Button full onClick={handleVerifyOtp} disabled={forgotSending || forgotOtp.length !== 6}>
               {forgotSending ? <Spinner size={18} /> : <Icon name="check" size={18} />}
-              {forgotSending ? "Verifying..." : "Verify code"}
+              {forgotSending ? "Verifying…" : "Verify code"}
             </Button>
           ) : forgotStep === "reset" ? (
             <Button full onClick={handleResetPassword} disabled={forgotSending}>
               {forgotSending ? <Spinner size={18} /> : <Icon name="check" size={18} />}
-              {forgotSending ? "Resetting..." : "Reset password"}
+              {forgotSending ? "Resetting…" : "Reset password"}
             </Button>
           ) : null
         }
@@ -390,8 +401,7 @@ export function Login() {
           {forgotStep === "email" && (
             <>
               <p className="text-sm text-slate-600 dark:text-slate-300">
-                Enter your Primer email address. We&apos;ll send a 6-digit verification
-                code that expires in 10 minutes.
+                Enter your Primer email. We&apos;ll send a 6-digit code that expires in 10 minutes.
               </p>
               <TextField
                 label="Primer email"
@@ -399,6 +409,7 @@ export function Login() {
                 value={forgotEmail}
                 onChange={(e) => setForgotEmail(e.target.value)}
                 placeholder="you@primer.com"
+                autoComplete="email"
               />
             </>
           )}
@@ -406,21 +417,24 @@ export function Login() {
           {forgotStep === "otp" && (
             <>
               <p className="text-sm text-slate-600 dark:text-slate-300">
-                We sent a 6-digit code to <span className="font-semibold">{forgotEmail || email}</span>.
-                Enter it below to verify your identity.
+                A 6-digit code was sent to{" "}
+                <span className="font-semibold">{forgotEmail.trim()}</span>. Enter it below.
               </p>
               {forgotDevOtp && (
                 <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
-                  <strong>Dev mode:</strong> Your code is <code className="font-mono font-bold">{forgotDevOtp}</code>
+                  <strong>Dev mode:</strong> Your code is{" "}
+                  <code className="font-mono font-bold">{forgotDevOtp}</code>
                 </p>
               )}
               <TextField
                 label="Verification code"
                 type="text"
+                inputMode="numeric"
                 maxLength={6}
                 value={forgotOtp}
                 onChange={(e) => setForgotOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
                 placeholder="123456"
+                autoComplete="one-time-code"
               />
               <button
                 type="button"
@@ -428,6 +442,7 @@ export function Login() {
                   setForgotStep("email");
                   setForgotOtp("");
                   setForgotError("");
+                  setForgotDevOtp(null);
                 }}
                 className="text-xs font-semibold text-indigo-600 dark:text-indigo-400"
               >
@@ -447,6 +462,7 @@ export function Login() {
                 value={forgotNewPassword}
                 onChange={(e) => setForgotNewPassword(e.target.value)}
                 placeholder="At least 6 characters"
+                autoComplete="new-password"
               />
               <TextField
                 label="Confirm new password"
@@ -454,15 +470,18 @@ export function Login() {
                 value={forgotConfirmPassword}
                 onChange={(e) => setForgotConfirmPassword(e.target.value)}
                 placeholder="Enter again to confirm"
+                autoComplete="new-password"
               />
+              {forgotNewPassword && forgotConfirmPassword && forgotNewPassword !== forgotConfirmPassword && (
+                <p className="text-xs text-rose-500">Passwords do not match.</p>
+              )}
             </>
           )}
 
           {forgotStep === "done" && (
             <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
               <p>
-                Your password has been reset successfully. You can now sign in
-                with your new password.
+                Your password has been reset. You can now sign in with your new password.
               </p>
             </div>
           )}
@@ -479,18 +498,12 @@ export function Login() {
       {/* Biometric enrollment prompt */}
       <Dialog
         open={enrollOpen}
-        onClose={() => {
-          setEnrollOpen(false);
-          setPendingProfile(null);
-        }}
+        onClose={() => { setEnrollOpen(false); setPendingProfile(null); }}
         title="Enable biometric unlock?"
         footer={
           <div className="flex w-full gap-2">
             <button
-              onClick={() => {
-                setEnrollOpen(false);
-                setPendingProfile(null);
-              }}
+              onClick={() => { setEnrollOpen(false); setPendingProfile(null); }}
               className="flex-1 rounded-xl border border-slate-300 py-2.5 text-sm font-semibold text-slate-700 dark:border-white/15 dark:text-slate-200"
             >
               Not now
@@ -503,8 +516,8 @@ export function Login() {
         }
       >
         <p className="text-sm text-slate-600 dark:text-slate-300">
-          Use your device&apos;s fingerprint, face, or PIN to sign in faster
-          next time. You can disable this later in your profile.
+          Use your device&apos;s fingerprint, face, or PIN to sign in faster next time. You can
+          disable this later in your profile.
         </p>
       </Dialog>
     </div>
