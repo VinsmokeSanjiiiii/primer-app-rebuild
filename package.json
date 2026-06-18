@@ -1,19 +1,23 @@
 {
   "name": "react-vite-tailwind",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "build:apk": "pnpm build && pnpm exec cap sync android && cmd /c \"set JAVA_HOME=C:\\Program Files\\Android\\Android Studio\\jbr&& cd android && .\\gradlew assembleDebug\""
+    "build:apk": "pnpm build && pnpm exec cap sync android && cmd /c \"set JAVA_HOME=C:\\Program Files\\Android\\Android Studio\\jbr&& cd android && .\\gradlew assembleDebug\"",
+    "zip": "git archive -o project.zip HEAD"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.0",
+    "@capacitor/app": "^8.1.0",
     "@capacitor/core": "^8.4.0",
+    "@capacitor/filesystem": "^8.1.2",
     "@capacitor/local-notifications": "^8.2.0",
     "@capacitor/status-bar": "^8",
+    "@capawesome-team/capacitor-file-opener": "^8.0.1",
     "@hugotomazi/capacitor-navigation-bar": "^4.0.1",
     "clsx": "2.1.1",
     "firebase": "^12.14.0",

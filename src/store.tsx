@@ -49,6 +49,20 @@ import { cancelShiftReminders } from "./lib/reminders";
 // ---------------------------------------------------------------------------
 const SESSION_KEY = "primer_portal_session";
 const THEME_KEY = "primer_portal_theme";
+const NAV_BLUR_KEY = "primer_portal_nav_blur";
+
+export type ThemeMode = "system" | "light" | "dark";
+
+function prefersDark(): boolean {
+  if (typeof window === "undefined" || !window.matchMedia) return false;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function readThemeMode(): ThemeMode {
+  const raw = (typeof localStorage !== "undefined" && localStorage.getItem(THEME_KEY)) || "";
+  if (raw === "light" || raw === "dark" || raw === "system") return raw;
+  return "system";
+}
 
 // ---------------------------------------------------------------------------
 // Default empty profile for unauthenticated state
@@ -128,7 +142,13 @@ interface AppState {
 
   // theme
   dark: boolean;
+  themeMode: ThemeMode;
+  setThemeMode: (m: ThemeMode) => void;
   toggleDark: () => void;
+
+  // appearance
+  navBlur: boolean;
+  setNavBlur: (v: boolean) => void;
 
   // navigation
   screen: ScreenId;
@@ -201,10 +221,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   });
 
-  // ---- theme ----
-  const [dark, setDark] = useState<boolean>(() => {
-    return localStorage.getItem(THEME_KEY) === "dark";
+  // ---- theme (tri-state: system | light | dark) ----
+  const [themeMode, setThemeModeState] = useState<ThemeMode>(() => readThemeMode());
+  const [systemDark, setSystemDark] = useState<boolean>(() => prefersDark());
+  const dark = themeMode === "system" ? systemDark : themeMode === "dark";
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    mql.addEventListener?.("change", onChange);
+    return () => mql.removeEventListener?.("change", onChange);
+  }, []);
+
+  const setThemeMode = useCallback((m: ThemeMode) => {
+    localStorage.setItem(THEME_KEY, m);
+    setThemeModeState(m);
+  }, []);
+
+  // ---- appearance: nav blur ----
+  const [navBlur, setNavBlurState] = useState<boolean>(() => {
+    const raw = localStorage.getItem(NAV_BLUR_KEY);
+    return raw === null ? true : raw === "true";
   });
+  const setNavBlur = useCallback((v: boolean) => {
+    localStorage.setItem(NAV_BLUR_KEY, String(v));
+    setNavBlurState(v);
+  }, []);
 
   // ---- navigation ----
   const [screen, setScreen] = useState<ScreenId>("dashboard");
@@ -353,11 +396,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     repo.signOut().catch(() => {});
   }, [repo]);
 
-  // ---- theme ----
+  // ---- theme: legacy toggle cycles system → light → dark → system ----
   const toggleDark = useCallback(() => {
-    setDark((d) => {
-      const next = !d;
-      localStorage.setItem(THEME_KEY, next ? "dark" : "light");
+    setThemeModeState((prev) => {
+      const next: ThemeMode = prev === "system" ? "light" : prev === "light" ? "dark" : "system";
+      localStorage.setItem(THEME_KEY, next);
       return next;
     });
   }, []);
@@ -870,7 +913,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       signInWithEmployeeId,
       signOut,
       dark,
+      themeMode,
+      setThemeMode,
       toggleDark,
+      navBlur,
+      setNavBlur,
       screen,
       navigate,
       back,
@@ -902,7 +949,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       hasHydrated,
     }),
     [
-      session, signIn, signInWithEmployeeId, signOut, dark, toggleDark, screen, navigate, back, stack.length,
+      session, signIn, signInWithEmployeeId, signOut, dark, themeMode, setThemeMode, toggleDark, navBlur, setNavBlur, screen, navigate, back, stack.length,
       profile, attendance, leaves, ot, coverage, infractions, holidays, notifications,
       clockIn, clockOut, clockBusy, updateNote, submitLeave, cancelLeave, submitOt, cancelOt,
       submitTechCoverage, takeoverCoverage, cancelCoverage, changeLeaveDate, updateProfile,

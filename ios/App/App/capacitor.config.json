@@ -3,6 +3,11 @@
 	"appName": "Primer Communications",
 	"webDir": "dist",
 	"packageClassList": [
-		"LocalNotificationsPlugin"
+		"AppPlugin",
+		"FilesystemPlugin",
+		"LocalNotificationsPlugin",
+		"StatusBarPlugin",
+		"FileOpenerPlugin",
+		"NavigationBarPlugin"
 	]
 }

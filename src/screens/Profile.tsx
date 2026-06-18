@@ -6,7 +6,7 @@ import { Icon, type IconName } from "../components/Icon";
 import { tenureFrom } from "../lib/date";
 
 export function Profile() {
-  const { profile, updateProfile, signOut, navigate, toggleDark, dark, toast } = useApp();
+  const { profile, updateProfile, signOut, navigate, toggleDark, dark, toast, themeMode, setThemeMode, navBlur, setNavBlur } = useApp();
   const fileRef = useRef<HTMLInputElement>(null);
   const [pwOpen, setPwOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
@@ -118,6 +118,44 @@ export function Profile() {
           </div>
         </Card>
 
+        {/* Appearance */}
+        <SectionTitle>Appearance</SectionTitle>
+        <Card className="space-y-4">
+          <div>
+            <p className="mb-2 text-xs font-semibold text-slate-500 dark:text-slate-400">Theme</p>
+            <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1 dark:bg-white/5">
+              {(["system", "light", "dark"] as const).map((m) => {
+                const active = themeMode === m;
+                const iconName: IconName = m === "system" ? "refresh" : m === "light" ? "sun" : "moon";
+                return (
+                  <button
+                    key={m}
+                    onClick={() => setThemeMode(m)}
+                    className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-bold capitalize transition ${
+                      active
+                        ? "bg-white text-indigo-600 shadow-sm dark:bg-slate-800 dark:text-indigo-300"
+                        : "text-slate-500 dark:text-slate-400"
+                    }`}
+                  >
+                    <Icon name={iconName} size={14} />
+                    {m}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1.5 text-[11px] text-slate-400">
+              {themeMode === "system" ? `Following device · currently ${dark ? "dark" : "light"}` : "Manual override"}
+            </p>
+          </div>
+
+          <ToggleRow
+            label="Nav bar blur"
+            hint="Frosted blur effect on top and bottom bars"
+            value={navBlur}
+            onChange={setNavBlur}
+          />
+        </Card>
+
         {/* Shortcuts */}
         <SectionTitle>Shortcuts</SectionTitle>
         <div className="space-y-2">
@@ -198,6 +236,32 @@ function NavRow({ icon, label, onClick, danger }: { icon: IconName; label: strin
       </div>
       <span className={`flex-1 text-sm font-semibold ${danger ? "text-rose-600 dark:text-rose-300" : "text-slate-700 dark:text-slate-200"}`}>{label}</span>
       <Icon name="chevron" size={18} className="text-slate-300" />
+    </button>
+  );
+}
+
+function ToggleRow({ label, hint, value, onChange }: { label: string; hint?: string; value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!value)}
+      className="flex w-full items-center justify-between gap-3 text-left"
+    >
+      <div>
+        <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">{label}</p>
+        {hint && <p className="text-[11px] text-slate-400">{hint}</p>}
+      </div>
+      <span
+        className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition ${
+          value ? "bg-indigo-600" : "bg-slate-300 dark:bg-white/15"
+        }`}
+      >
+        <span
+          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${
+            value ? "translate-x-5" : "translate-x-0.5"
+          }`}
+        />
+      </span>
     </button>
   );
 }
