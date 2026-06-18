@@ -7,13 +7,14 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "build:apk": "pnpm build && pnpm exec cap sync android && cmd /c \"set JAVA_HOME=C:\\Program Files\\Android\\Android Studio\\jbr&& cd android && .\\gradlew assembleDebug\"",
-    "zip": "git archive -o primer_communications.zip HEAD"
+    "build:apk": "pnpm build && pnpm exec cap sync android && cmd /c \"set JAVA_HOME=C:\\Program Files\\Android\\Android Studio\\jbr&& cd android && .\\gradlew assembleDebug\""
   },
   "dependencies": {
     "@capacitor/android": "^8.4.0",
     "@capacitor/core": "^8.4.0",
     "@capacitor/local-notifications": "^8.2.0",
+    "@capacitor/status-bar": "^8",
+    "@hugotomazi/capacitor-navigation-bar": "^4.0.1",
     "clsx": "2.1.1",
     "firebase": "^12.14.0",
     "react": "19.2.6",

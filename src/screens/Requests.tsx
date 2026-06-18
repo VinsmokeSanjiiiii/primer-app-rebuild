@@ -4,7 +4,8 @@ import { AppBar } from "../components/AppBar";
 import { Card, Button, Badge, EmptyState, Dialog, TextArea, TextField } from "../components/ui";
 import { Icon } from "../components/Icon";
 import { StatusBadge } from "./Dashboard";
-import { MONTHS, parseDate, startOfDay, serverNow, currentServerMonth, currentServerYear } from "../lib/date";
+import { parseDate, startOfDay, serverNow, currentServerMonth, currentServerYear } from "../lib/date";
+import { DateFilter } from "../components/DateFilter";
 import type { LeaveRequest, OtRequest } from "../types";
 
 function buildYears(): string[] {
@@ -91,24 +92,17 @@ export function Requests() {
         </div>
 
         {/* Month / Year filter */}
-        <div className="flex gap-2">
-          <select
-            value={filterMonth}
-            onChange={(e) => setFilterMonth(e.target.value)}
-            className="flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-white/15 dark:bg-slate-900/50 dark:text-white"
-          >
-            <option value="All">All months</option>
-            {MONTHS.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-          <select
-            value={filterYear}
-            onChange={(e) => setFilterYear(e.target.value)}
-            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-white/15 dark:bg-slate-900/50 dark:text-white"
-          >
-            <option value="All">All years</option>
-            {FILTER_YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
-          </select>
-        </div>
+        <DateFilter
+          month={filterMonth}
+          year={filterYear}
+          years={FILTER_YEARS}
+          onMonthChange={setFilterMonth}
+          onYearChange={setFilterYear}
+          onReset={() => {
+            setFilterMonth(currentServerMonth());
+            setFilterYear(String(currentServerYear()));
+          }}
+        />
 
         <TextField placeholder="Search requests…" value={search} onChange={(e) => setSearch(e.target.value)} />
 
