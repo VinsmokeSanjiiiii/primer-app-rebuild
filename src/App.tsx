@@ -17,6 +17,7 @@ import { Infractions } from "./screens/Infractions";
 import { Profile } from "./screens/Profile";
 import { Notifications } from "./screens/Notifications";
 import type { ScreenId } from "./types";
+import { applySystemBars } from "./lib/systemBars";
 
 const NAV: { id: ScreenId; label: string; icon: IconName }[] = [
   { id: "dashboard", label: "Home", icon: "home" },
@@ -47,7 +48,7 @@ function Shell() {
   const showNav = (["dashboard", "attendance", "requests", "profile"] as ScreenId[]).includes(screen);
 
   return (
-    <div className="flex h-full flex-col bg-slate-50 dark:bg-slate-950">
+    <div className="flex h-full flex-col bg-slate-50 safe-top dark:bg-slate-950">
       <div className="flex-1 overflow-y-auto">
         {!hasHydrated ? (
           <div className="flex h-full items-center justify-center">
@@ -65,18 +66,18 @@ function Shell() {
 
       {/* Bottom nav */}
       {isAuthed && showNav && (
-        <nav className="flex items-center justify-around border-t border-slate-200/70 bg-white/90 px-2 py-1.5 backdrop-blur-md dark:border-white/10 dark:bg-slate-900/90">
+        <nav className="flex items-center justify-around border-t border-slate-200/70 bg-white/90 px-2 py-1.5 safe-bottom backdrop-blur-md dark:border-white/10 dark:bg-slate-900/90">
           {NAV.map((n) => {
             const active = screen === n.id;
             return (
               <button
                 key={n.id}
                 onClick={() => navigate(n.id)}
-                className={`flex flex-1 flex-col items-center gap-0.5 rounded-xl py-1.5 transition ${
+                className={`flex flex-1 flex-col items-center gap-0.5 rounded-2xl py-1.5 transition ${
                   active ? "text-indigo-600 dark:text-indigo-400" : "text-slate-400"
                 }`}
               >
-                <div className={`flex h-8 w-12 items-center justify-center rounded-full transition ${active ? "bg-indigo-100 dark:bg-indigo-500/15" : ""}`}>
+                <div className={`flex h-8 w-12 items-center justify-center rounded-full transition-all duration-200 ${active ? "bg-indigo-100 scale-105 dark:bg-indigo-500/15" : ""}`}>
                   <Icon name={n.icon} size={20} />
                 </div>
                 <span className="text-[10px] font-semibold">{n.label}</span>
@@ -112,6 +113,8 @@ function Root() {
     const el = document.documentElement;
     if (dark) el.classList.add("dark");
     else el.classList.remove("dark");
+    // Keep Android status / navigation bars in sync with the in-app theme.
+    void applySystemBars(dark);
   }, [dark]);
 
   return (

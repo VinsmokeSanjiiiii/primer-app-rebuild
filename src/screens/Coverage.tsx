@@ -3,8 +3,9 @@ import { useApp } from "../store";
 import { AppBar } from "../components/AppBar";
 import { Card, Button, Badge, EmptyState, Dialog } from "../components/ui";
 import { Icon } from "../components/Icon";
+import { DateFilter } from "../components/DateFilter";
 import { StatusBadge } from "./Dashboard";
-import { MONTHS, serverNow, parseDate, startOfDay, currentServerMonth, currentServerYear } from "../lib/date";
+import { serverNow, parseDate, fmtDate, startOfDay, currentServerMonth, currentServerYear } from "../lib/date";
 import type { CoverageRequest } from "../types";
 
 const ITEMS_PER_PAGE = 10;
@@ -132,7 +133,11 @@ export function Coverage() {
         </div>
 
         <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-          <Meta label="Date" value={c.coverageDate} isPast={isPastDate && tab !== "completed"} />
+          <Meta
+            label="Date"
+            value={tab === "completed" ? fmtDate(parseDate(c.coverageDate)) : c.coverageDate}
+            isPast={isPastDate && tab !== "completed"}
+          />
           <Meta label="Time" value={c.coverageTime} />
           <Meta label="Hours" value={`${c.forCoverageHours}h`} />
         </div>
@@ -213,24 +218,18 @@ export function Coverage() {
 
         {/* Month/Year filter — shown on Available and Ongoing */}
         {tab !== "completed" && (
-          <div className="flex gap-2">
-            <select
-              value={month}
-              onChange={(e) => handleMonthChange(e.target.value)}
-              className="flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-white/15 dark:bg-slate-900/50 dark:text-white"
-            >
-              <option value="All">All months</option>
-              {MONTHS.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-            <select
-              value={year}
-              onChange={(e) => handleYearChange(e.target.value)}
-              className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-white/15 dark:bg-slate-900/50 dark:text-white"
-            >
-              <option value="All">All years</option>
-              {FILTER_YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
-            </select>
-          </div>
+          <DateFilter
+            month={month}
+            year={year}
+            years={FILTER_YEARS}
+            onMonthChange={handleMonthChange}
+            onYearChange={handleYearChange}
+            onReset={() => {
+              setMonth(currentServerMonth());
+              setYear(String(currentServerYear()));
+              setPage(0);
+            }}
+          />
         )}
 
         {/* Completed: All / Mine toggle */}
