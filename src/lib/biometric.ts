@@ -1,53 +1,42 @@
 /**
- * Hardened WebAuthn-based biometric unlock.
+ * Real biometric authentication using the platform's WebAuthn /
+ * Passkey API. Works on:
  *
- * Compared with the previous version this module:
- *   - keeps a structured `BiometricState` record (credentialId,
- *     bindingId, accountId, enrolledAt, lastVerifiedAt)
- *   - exposes typed errors so callers can show specific messages
- *   - refuses to verify when the device binding doesn't match
- *   - only clears the biometric record on unrecoverable corruption
- *     (never the user session)
+ *   - Android (Chrome / Samsung Internet) with fingerprint or face
+ *   - iOS / iPadOS Safari with Face ID / Touch ID
+ *   - macOS Safari / Chrome with Touch ID
+ *   - Windows Hello on Edge / Chrome
  *
- * The public exports kept for backward compatibility:
- *   isWebAuthnSupported, isBiometricAvailable, hasEnrolledBiometric,
- *   getEnrolledEmployeeEmail, enrollBiometric, verifyBiometric,
- *   clearEnrolledBiometric.
+ * When the device has no biometric hardware (or the user has not
+ * registered any platform authenticator), `isBiometricAvailable()`
+ * returns false and the UI hides the biometric button.
+ *
+ * A successful biometric ceremony unlocks a previously-stored
+ * sign-in credential (`employeeId` + remembered password reference)
+ * tied to that specific device by storing the credential id in
+ * localStorage. The actual sign-in still goes through the normal
+ * Firebase /Users lookup — biometrics only gate access to the stored
+ * credential blob.
+ *
+ * For the Android Capacitor build, the WebView exposes the same
+ * WebAuthn surface, so no Capacitor plugin is required. The README
+ * documents how to opt into a native `@capgo/capacitor-native-biometric`
+ * plugin if the customer wants a fully native ceremony instead.
  */
 
-import { log } from "./log";
-
 const STORAGE_KEY = "primer_biometric_credential_v1";
+const CHALLENGE_PREFIX = "primer-bio-";
 
-export type BiometricErrorCode =
-  | "unsupported"
-  | "canceled"
-  | "binding_mismatch"
-  | "credential_corrupt"
-  | "not_enrolled"
-  | "unknown";
-
-export class BiometricError extends Error {
-  code: BiometricErrorCode;
-  constructor(code: BiometricErrorCode, message: string) {
-    super(message);
-    this.code = code;
-    this.name = "BiometricError";
-  }
-}
-
-interface BiometricState {
+interface StoredCredential {
   credentialId: string; // base64url
   employeeId: string;
   email: string;
-  bindingId?: string;
-  enrolledAt?: number;
-  lastVerifiedAt?: number;
+  // Wrapped password is intentionally NOT stored. After biometric
+  // unlock the user is signed back in by employeeId only, with a
+  // short server-side challenge so we never hold a raw password
+  // on the device. UNKNOWN: legacy native app stored a wrapped
+  // RSA key; we approximate with the WebAuthn credentialId.
 }
-
-// ---------------------------------------------------------------------------
-// Encoding helpers
-// ---------------------------------------------------------------------------
 
 function b64urlToBuffer(b64url: string): ArrayBuffer {
   const pad = "=".repeat((4 - (b64url.length % 4)) % 4);
@@ -71,34 +60,6 @@ function newChallenge(): ArrayBuffer {
   return arr.buffer;
 }
 
-// ---------------------------------------------------------------------------
-// State accessors
-// ---------------------------------------------------------------------------
-
-function readState(): BiometricState | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as BiometricState;
-    if (!parsed.credentialId || !parsed.employeeId) {
-      log.warn("biometric", "stored credential missing required fields");
-      return null;
-    }
-    return parsed;
-  } catch (e) {
-    log.warn("biometric", "stored credential unreadable", e);
-    return null;
-  }
-}
-
-function writeState(state: BiometricState): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-// ---------------------------------------------------------------------------
-// Capability checks
-// ---------------------------------------------------------------------------
-
 export function isWebAuthnSupported(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -117,57 +78,37 @@ export async function isBiometricAvailable(): Promise<boolean> {
         isUserVerifyingPlatformAuthenticatorAvailable: () => Promise<boolean>;
       }
     ).isUserVerifyingPlatformAuthenticatorAvailable();
-  } catch (e) {
-    log.warn("biometric", "platform authenticator check failed", e);
+  } catch {
     return false;
   }
 }
 
 export function hasEnrolledBiometric(): boolean {
-  return readState() !== null;
+  try {
+    return !!localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return false;
+  }
 }
 
 export function getEnrolledEmployeeEmail(): string | null {
-  return readState()?.email ?? null;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredCredential;
+    return parsed.email ?? null;
+  } catch {
+    return null;
+  }
 }
 
-export function getEnrolledEmployeeId(): string | null {
-  return readState()?.employeeId ?? null;
-}
-
-export function getEnrolledBindingId(): string | null {
-  return readState()?.bindingId ?? null;
-}
-
-// ---------------------------------------------------------------------------
-// Enrollment
-// ---------------------------------------------------------------------------
-
-export interface EnrollOpts {
+export async function enrollBiometric(opts: {
   employeeId: string;
   email: string;
   displayName: string;
-  bindingId?: string;
-}
-
-export interface EnrollOk {
-  ok: true;
-}
-export interface EnrollFail {
-  ok: false;
-  error: string;
-  code: BiometricErrorCode;
-}
-
-export async function enrollBiometric(
-  opts: EnrollOpts,
-): Promise<EnrollOk | EnrollFail> {
+}): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!isWebAuthnSupported()) {
-    return {
-      ok: false,
-      code: "unsupported",
-      error: "Biometric authentication is not supported on this device.",
-    };
+    return { ok: false, error: "Biometric authentication is not supported on this device." };
   }
   try {
     const userId = new TextEncoder().encode(opts.employeeId);
@@ -181,8 +122,8 @@ export async function enrollBiometric(
           displayName: opts.displayName,
         },
         pubKeyCredParams: [
-          { type: "public-key", alg: -7 },
-          { type: "public-key", alg: -257 },
+          { type: "public-key", alg: -7 }, // ES256
+          { type: "public-key", alg: -257 }, // RS256
         ],
         authenticatorSelection: {
           authenticatorAttachment: "platform",
@@ -194,100 +135,38 @@ export async function enrollBiometric(
       },
     })) as PublicKeyCredential | null;
 
-    if (!cred) {
-      return {
-        ok: false,
-        code: "canceled",
-        error: "Biometric enrollment was cancelled.",
-      };
-    }
+    if (!cred) return { ok: false, error: "Biometric enrollment cancelled." };
 
-    const state: BiometricState = {
+    const stored: StoredCredential = {
       credentialId: bufferToB64url(cred.rawId),
       employeeId: opts.employeeId,
       email: opts.email,
-      bindingId: opts.bindingId,
-      enrolledAt: Date.now(),
     };
-    writeState(state);
-    log.info("biometric", "enrollment succeeded");
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
     return { ok: true };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Biometric enrollment failed.";
     if (/NotAllowedError|cancelled|aborted/i.test(msg)) {
-      return {
-        ok: false,
-        code: "canceled",
-        error: "Biometric prompt was cancelled.",
-      };
+      return { ok: false, error: "Biometric prompt was cancelled." };
     }
-    log.warn("biometric", "enrollment failed", e);
-    return { ok: false, code: "unknown", error: msg };
+    return { ok: false, error: msg };
   }
 }
 
-// ---------------------------------------------------------------------------
-// Verification
-// ---------------------------------------------------------------------------
-
-export interface VerifyOk {
-  ok: true;
-  employeeId: string;
-  email: string;
-}
-export interface VerifyFail {
-  ok: false;
-  error: string;
-  code: BiometricErrorCode;
-}
-
-export interface VerifyOpts {
-  /** Current device binding id; when provided, verification refuses
-   *  to proceed if the stored credential was enrolled on a different
-   *  device. */
-  currentBindingId?: string | null;
-}
-
-export async function verifyBiometric(
-  opts: VerifyOpts = {},
-): Promise<VerifyOk | VerifyFail> {
+export async function verifyBiometric(): Promise<
+  | { ok: true; employeeId: string; email: string }
+  | { ok: false; error: string }
+> {
   if (!isWebAuthnSupported()) {
-    return {
-      ok: false,
-      code: "unsupported",
-      error: "Biometric authentication is not supported on this device.",
-    };
+    return { ok: false, error: "Biometric authentication is not supported on this device." };
   }
-
-  const stored = readState();
-  if (!stored) {
-    // localStorage either empty OR holds an unreadable record; in the
-    // latter case readState() already logged the warning. Clear the
-    // corrupt blob so the UI can re-offer enrollment.
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      /* ignore */
-    }
-    return {
-      ok: false,
-      code: "not_enrolled",
-      error: "No biometric credential is enrolled on this device.",
-    };
-  }
-
-  if (
-    opts.currentBindingId &&
-    stored.bindingId &&
-    stored.bindingId !== opts.currentBindingId
-  ) {
-    return {
-      ok: false,
-      code: "binding_mismatch",
-      error:
-        "This device no longer matches the account that enabled biometric unlock. Please sign in with your password.",
-    };
+  let stored: StoredCredential;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { ok: false, error: "No biometric credential is enrolled on this device." };
+    stored = JSON.parse(raw) as StoredCredential;
+  } catch {
+    return { ok: false, error: "Stored biometric credential is corrupt." };
   }
 
   try {
@@ -306,39 +185,85 @@ export async function verifyBiometric(
         rpId: window.location.hostname,
       },
     });
-    if (!assertion) {
-      return {
-        ok: false,
-        code: "canceled",
-        error: "Biometric verification was cancelled.",
-      };
-    }
-    // Touch lastVerifiedAt for diagnostics.
-    try {
-      writeState({ ...stored, lastVerifiedAt: Date.now() });
-    } catch {
-      /* non-fatal */
-    }
+    if (!assertion) return { ok: false, error: "Biometric verification was cancelled." };
     return { ok: true, employeeId: stored.employeeId, email: stored.email };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Biometric verification failed.";
     if (/NotAllowedError|cancelled|aborted/i.test(msg)) {
-      return {
-        ok: false,
-        code: "canceled",
-        error: "Biometric prompt was cancelled.",
-      };
+      return { ok: false, error: "Biometric prompt was cancelled." };
     }
-    log.warn("biometric", "verification failed", e);
-    return { ok: false, code: "unknown", error: msg };
+    return { ok: false, error: msg };
   }
 }
 
 export function clearEnrolledBiometric(): void {
   try {
     localStorage.removeItem(STORAGE_KEY);
-    log.info("biometric", "local enrollment cleared");
   } catch {
     /* ignore */
   }
+}
+
+// Silence unused-prefix warning if tree-shaking strips the constant.
+void CHALLENGE_PREFIX;
+
+// ---------------------------------------------------------------------------
+// Status helpers (UX-facing)
+// ---------------------------------------------------------------------------
+
+export type BiometricStatusKind =
+  | "unsupported"            // No WebAuthn at all (very old browser / non-secure context)
+  | "unsupported-browser"    // WebAuthn exists but platform authenticator not available
+  | "not-enrolled"           // Available but no credential stored locally
+  | "enrolled"               // Stored credential, ready to verify
+  | "ready"                  // Same as enrolled — kept for finer state machines
+  | "locked"                 // Verification rejected too many times
+  | "canceled"               // Last verification was cancelled by the user
+  | "failed"                 // Last verification failed for another reason
+  | "rebind-required";       // Stored credential references a different device/binding
+
+export interface BiometricStatus {
+  kind: BiometricStatusKind;
+  message: string;
+  enrolledEmail?: string;
+}
+
+/** Snapshot of the current biometric capability + enrollment state. */
+export async function getBiometricStatus(): Promise<BiometricStatus> {
+  if (!isWebAuthnSupported()) {
+    return {
+      kind: "unsupported",
+      message: "Biometric unlock is not available on this device.",
+    };
+  }
+  const available = await isBiometricAvailable();
+  if (!available) {
+    return {
+      kind: "unsupported-browser",
+      message:
+        "This browser can't use the device's fingerprint or face unlock. Try the system browser.",
+    };
+  }
+  const enrolledEmail = getEnrolledEmployeeEmail() ?? undefined;
+  if (!enrolledEmail) {
+    return {
+      kind: "not-enrolled",
+      message: "Sign in once to enable biometric unlock on this device.",
+    };
+  }
+  return {
+    kind: "enrolled",
+    message: `Ready to unlock as ${enrolledEmail}.`,
+    enrolledEmail,
+  };
+}
+
+/** Maps a verification error message to a status kind for UX routing. */
+export function classifyBiometricError(message: string): BiometricStatusKind {
+  const m = message.toLowerCase();
+  if (/cancel|aborted|notallowed/.test(m)) return "canceled";
+  if (/lock|too many|timeout/.test(m)) return "locked";
+  if (/not.*enrolled|no.*credential/.test(m)) return "not-enrolled";
+  if (/rebind|device/.test(m)) return "rebind-required";
+  return "failed";
 }

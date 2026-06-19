@@ -1,64 +1,86 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "../components/Icon";
-import { useApp } from "../store";
+
+const SESSION_KEY = "primer_portal_session";
 
 /**
- * Splash screen driven by a real startup state machine. The store
- * exposes `runStartupChecks()` which executes:
- *   1. resolve device binding id
- *   2. load local app version
- *   3. fetch remote /AppVersion node
- *   4. compare versions and stash the decision in the store
- *   5. fire-and-forget sync the client snapshot to RTDB
- *   6. restore session from prior repository state
+ * One-shot splash. Animation is cosmetic only — it does NOT gate readiness.
  *
- * Each step updates a status string we render here. Failures fall
- * through to a generic "ready" outcome so the app keeps working
- * when the network or version node is broken.
+ * - Guarded with a ref so StrictMode double-invocation / parent re-renders
+ *   cannot restart the timer (previous bug: progress looped because the
+ *   effect depended on `onDone`, which was a fresh function each render).
+ * - Always calls `onDone` exactly once, within a hard cap (~2.5s) even if
+ *   the visible steps are skipped or interrupted.
  */
 export function Splash({ onDone }: { onDone: () => void }) {
-  const { runStartupChecks } = useApp();
   const [progress, setProgress] = useState(0);
-  const [status, setStatus] = useState("Starting…");
-  const [online, setOnline] = useState(() =>
+  const [status, setStatus] = useState("Checking connection…");
+  const [online] = useState(() =>
     typeof navigator === "undefined" ? true : navigator.onLine,
   );
 
-  useEffect(() => {
-    const onOnline = () => setOnline(true);
-    const onOffline = () => setOnline(false);
-    window.addEventListener("online", onOnline);
-    window.addEventListener("offline", onOffline);
-    return () => {
-      window.removeEventListener("online", onOnline);
-      window.removeEventListener("offline", onOffline);
-    };
-  }, []);
+  // Stable ref to onDone so the effect can run with an empty dep array.
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+
+  // One-shot guard — survives StrictMode's double mount in dev.
+  const startedRef = useRef(false);
+  const finishedRef = useRef(false);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
+    const hasSession = (() => {
       try {
-        await runStartupChecks((step) => {
-          if (cancelled) return;
-          setStatus(step.label);
-          setProgress(step.progress);
-        });
+        return !!(
+          localStorage.getItem(SESSION_KEY) ?? sessionStorage.getItem(SESSION_KEY)
+        );
       } catch {
-        // Never block the app on startup-check failure.
-        if (!cancelled) setStatus("Ready");
+        return false;
       }
-      if (cancelled) return;
-      setProgress(100);
-      // Tiny delay so the final status has a chance to render.
-      setTimeout(() => {
-        if (!cancelled) onDone();
-      }, 220);
     })();
-    return () => {
-      cancelled = true;
+
+    const steps: { p: number; s: string }[] = [
+      { p: 20, s: online ? "Connection verified." : "Starting in offline mode…" },
+      { p: 45, s: "Verifying device…" },
+      { p: 65, s: hasSession ? "Restoring secure session…" : "Loading secure session…" },
+      { p: 85, s: "Preparing your workspace…" },
+      { p: 100, s: "Ready" },
+    ];
+
+    const finish = () => {
+      if (finishedRef.current) return;
+      finishedRef.current = true;
+      onDoneRef.current();
     };
-  }, [runStartupChecks, onDone]);
+
+    let i = 0;
+    const interval = window.setInterval(() => {
+      if (i < steps.length) {
+        setProgress(steps[i].p);
+        setStatus(steps[i].s);
+        i++;
+      } else {
+        window.clearInterval(interval);
+        window.setTimeout(finish, 200);
+      }
+    }, 350);
+
+    // Hard cap: never stay on the splash longer than ~2.5s, regardless.
+    const cap = window.setTimeout(() => {
+      window.clearInterval(interval);
+      setProgress(100);
+      setStatus("Ready");
+      finish();
+    }, 2500);
+
+    return () => {
+      window.clearInterval(interval);
+      window.clearTimeout(cap);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-8 bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 px-10 text-white">

@@ -43,37 +43,26 @@ import {
 } from "./lib/clockSync";
 import { safeWrite } from "./lib/repoSafe";
 import { cancelShiftReminders } from "./lib/reminders";
-import {
-  getOrCreateBindingId,
-} from "./lib/deviceBinding";
-
-import {
-  decideUpdateState,
-  fetchRemoteVersion,
-  getLocalVersion,
-  isVersionDismissed,
-  dismissVersion,
-  syncClientVersion,
-  type UpdateDecision,
-} from "./lib/appVersion";
-import {
-  getProfileDeviceId,
-  setProfileDeviceId,
-} from "./data/appVersionRepo";
-import { log } from "./lib/log";
-
-export interface SplashStep {
-  label: string;
-  progress: number;
-}
-export type SplashReporter = (step: SplashStep) => void;
-
 
 // ---------------------------------------------------------------------------
 // Keys for local persistence (DataStore analogue)
 // ---------------------------------------------------------------------------
 const SESSION_KEY = "primer_portal_session";
 const THEME_KEY = "primer_portal_theme";
+const NAV_BLUR_KEY = "primer_portal_nav_blur";
+
+export type ThemeMode = "system" | "light" | "dark";
+
+function prefersDark(): boolean {
+  if (typeof window === "undefined" || !window.matchMedia) return false;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function readThemeMode(): ThemeMode {
+  const raw = (typeof localStorage !== "undefined" && localStorage.getItem(THEME_KEY)) || "";
+  if (raw === "light" || raw === "dark" || raw === "system") return raw;
+  return "system";
+}
 
 // ---------------------------------------------------------------------------
 // Default empty profile for unauthenticated state
@@ -153,7 +142,13 @@ interface AppState {
 
   // theme
   dark: boolean;
+  themeMode: ThemeMode;
+  setThemeMode: (m: ThemeMode) => void;
   toggleDark: () => void;
+
+  // appearance
+  navBlur: boolean;
+  setNavBlur: (v: boolean) => void;
 
   // navigation
   screen: ScreenId;
@@ -191,18 +186,9 @@ interface AppState {
   toasts: Toast[];
   toast: (text: string, kind?: Toast["kind"]) => void;
 
-  // version + binding
-  bindingId: string | null;
-  updateDecision: UpdateDecision | null;
-  updateModalOpen: boolean;
-  dismissUpdate: () => void;
-  rebindDevice: () => Promise<{ ok: boolean; error?: string }>;
-  runStartupChecks: (report?: SplashReporter) => Promise<void>;
-
   // internal
   hasHydrated: boolean;
 }
-
 
 const Ctx = createContext<AppState | null>(null);
 
@@ -235,10 +221,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   });
 
-  // ---- theme ----
-  const [dark, setDark] = useState<boolean>(() => {
-    return localStorage.getItem(THEME_KEY) === "dark";
+  // ---- theme (tri-state: system | light | dark) ----
+  const [themeMode, setThemeModeState] = useState<ThemeMode>(() => readThemeMode());
+  const [systemDark, setSystemDark] = useState<boolean>(() => prefersDark());
+  const dark = themeMode === "system" ? systemDark : themeMode === "dark";
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    mql.addEventListener?.("change", onChange);
+    return () => mql.removeEventListener?.("change", onChange);
+  }, []);
+
+  const setThemeMode = useCallback((m: ThemeMode) => {
+    localStorage.setItem(THEME_KEY, m);
+    setThemeModeState(m);
+  }, []);
+
+  // ---- appearance: nav blur ----
+  const [navBlur, setNavBlurState] = useState<boolean>(() => {
+    const raw = localStorage.getItem(NAV_BLUR_KEY);
+    return raw === null ? true : raw === "true";
   });
+  const setNavBlur = useCallback((v: boolean) => {
+    localStorage.setItem(NAV_BLUR_KEY, String(v));
+    setNavBlurState(v);
+  }, []);
 
   // ---- navigation ----
   const [screen, setScreen] = useState<ScreenId>("dashboard");
@@ -387,11 +396,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     repo.signOut().catch(() => {});
   }, [repo]);
 
-  // ---- theme ----
+  // ---- theme: legacy toggle cycles system → light → dark → system ----
   const toggleDark = useCallback(() => {
-    setDark((d) => {
-      const next = !d;
-      localStorage.setItem(THEME_KEY, next ? "dark" : "light");
+    setThemeModeState((prev) => {
+      const next: ThemeMode = prev === "system" ? "light" : prev === "light" ? "dark" : "system";
+      localStorage.setItem(THEME_KEY, next);
       return next;
     });
   }, []);
@@ -895,112 +904,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [repo],
   );
 
-  // ---- version + binding state ----
-  const [bindingId, setBindingId] = useState<string | null>(null);
-  const [updateDecision, setUpdateDecision] = useState<UpdateDecision | null>(null);
-  const [updateModalOpen, setUpdateModalOpen] = useState(false);
-
-  const dismissUpdate = useCallback(() => {
-    if (updateDecision?.status === "forced") return; // can't dismiss forced
-    if (updateDecision?.remote?.latestVersion) {
-      dismissVersion(updateDecision.remote.latestVersion);
-    }
-    setUpdateModalOpen(false);
-  }, [updateDecision]);
-
-  const rebindDevice = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
-    if (!profile?.employeeId) {
-      return { ok: false, error: "Sign in first to rebind this device." };
-    }
-    try {
-      const localId = bindingId ?? (await getOrCreateBindingId());
-      if (!bindingId) setBindingId(localId);
-      const prev = await getProfileDeviceId(profile.employeeId);
-      await setProfileDeviceId(profile.employeeId, localId, prev);
-      toast("This device is now bound to your account.", "success");
-      return { ok: true };
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to rebind device.";
-      log.error("binding", "rebind failed", e);
-      return { ok: false, error: msg };
-    }
-  }, [profile?.employeeId, bindingId, toast]);
-
-  const runStartupChecks = useCallback(
-    async (report?: SplashReporter) => {
-      const r = report ?? (() => {});
-      try {
-        r({ label: "Verifying device…", progress: 10 });
-        const id = await getOrCreateBindingId();
-        setBindingId(id);
-
-        r({ label: "Reading app version…", progress: 30 });
-        const local = await getLocalVersion();
-
-        r({ label: "Checking for updates…", progress: 55 });
-        const remote = await fetchRemoteVersion();
-        const decision = decideUpdateState(local, remote);
-        setUpdateDecision(decision);
-
-        // Decide modal visibility: forced always shows; optional shows
-        // unless the user already dismissed this exact version.
-        if (decision.status === "forced") {
-          setUpdateModalOpen(true);
-        } else if (
-          decision.status === "optional" &&
-          decision.remote &&
-          !isVersionDismissed(decision.remote.latestVersion)
-        ) {
-          setUpdateModalOpen(true);
-        }
-
-        r({ label: "Syncing device info…", progress: 75 });
-        // fire-and-forget; never blocks startup
-        void syncClientVersion(id, local);
-
-        r({ label: "Loading session…", progress: 90 });
-      } catch (e) {
-        log.warn("appVersion", "startup checks failed", e);
-      } finally {
-        r({ label: "Ready", progress: 100 });
-      }
-    },
-    [],
-  );
-
-  // Re-check on visibility/online (catches updates published while the
-  // user has the app open). We don't re-show a modal the user already
-  // dismissed unless the version changes.
-  useEffect(() => {
-    const recheck = () => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      void (async () => {
-        try {
-          const local = await getLocalVersion();
-          const remote = await fetchRemoteVersion();
-          const decision = decideUpdateState(local, remote);
-          setUpdateDecision(decision);
-          if (
-            decision.status === "forced" ||
-            (decision.status === "optional" &&
-              decision.remote &&
-              !isVersionDismissed(decision.remote.latestVersion))
-          ) {
-            setUpdateModalOpen(true);
-          }
-        } catch {
-          /* ignore */
-        }
-      })();
-    };
-    document.addEventListener("visibilitychange", recheck);
-    window.addEventListener("online", recheck);
-    return () => {
-      document.removeEventListener("visibilitychange", recheck);
-      window.removeEventListener("online", recheck);
-    };
-  }, []);
-
   // ---- context value ----
   const value = useMemo<AppState>(
     () => ({
@@ -1010,7 +913,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       signInWithEmployeeId,
       signOut,
       dark,
+      themeMode,
+      setThemeMode,
       toggleDark,
+      navBlur,
+      setNavBlur,
       screen,
       navigate,
       back,
@@ -1039,24 +946,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       markNotificationRead,
       toasts,
       toast,
-      bindingId,
-      updateDecision,
-      updateModalOpen,
-      dismissUpdate,
-      rebindDevice,
-      runStartupChecks,
       hasHydrated,
     }),
     [
-      session, signIn, signInWithEmployeeId, signOut, dark, toggleDark, screen, navigate, back, stack.length,
+      session, signIn, signInWithEmployeeId, signOut, dark, themeMode, setThemeMode, toggleDark, navBlur, setNavBlur, screen, navigate, back, stack.length,
       profile, attendance, leaves, ot, coverage, infractions, holidays, notifications,
       clockIn, clockOut, clockBusy, updateNote, submitLeave, cancelLeave, submitOt, cancelOt,
       submitTechCoverage, takeoverCoverage, cancelCoverage, changeLeaveDate, updateProfile,
       markNotificationRead, toasts, toast, hasHydrated,
-      bindingId, updateDecision, updateModalOpen, dismissUpdate, rebindDevice, runStartupChecks,
     ],
   );
-
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

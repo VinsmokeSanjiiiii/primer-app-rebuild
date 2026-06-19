@@ -1,146 +1,156 @@
-/**
- * Real device-binding service.
- *
- * Generates a stable installation ID per device and persists it
- * through Capacitor Preferences on native, or localStorage on web.
- * The same ID is reused on every launch; the database `Profile/<id>
- * /Device_ID` field records which device is bound to an account.
- *
- * No fake browser fingerprinting — installation IDs are the trust
- * anchor and are paired with a server-side binding record.
- */
+// Stable per-install device identity and a (best-effort) RTDB binding record.
+//
+// The device id lives in localStorage. It survives sign-out/sign-in and app
+// restarts but resets if the user wipes app storage — which is the correct
+// behaviour for "this install".
+//
+// Binding records are written under `DeviceBindings/{employeeId}/{deviceId}`.
+// They are advisory: rebind verification is enforced in the UI, not by the
+// database. Never silently swap bindings here — call `bindDevice` only after
+// the rebind UI has explicitly confirmed the user's identity.
 
-import { log } from "./log";
+import { get, ref, remove, set, serverTimestamp } from "firebase/database";
+import { getDb } from "../data/firebase";
 
-const STORAGE_KEY = "primer_device_binding_id_v1";
+const DEVICE_ID_KEY = "pulse.deviceId.v1";
 
-let _cached: string | null = null;
-let _capPreferences:
-  | typeof import("@capacitor/preferences").Preferences
-  | null
-  | undefined;
-
-async function getCapPreferences() {
-  if (_capPreferences !== undefined) return _capPreferences;
-  try {
-    // Capacitor Preferences exists on native, but the JS shim is also safe to
-    // load on web (it falls through to a memory/localStorage fallback in the
-    // SDK). We still prefer plain localStorage on web for predictability.
-    const mod = await import("@capacitor/preferences");
-    _capPreferences = mod.Preferences ?? null;
-  } catch {
-    _capPreferences = null;
-  }
-  return _capPreferences;
-}
-
-function isNative(): boolean {
-  try {
-    // The Capacitor global is injected by the native shell.
-    const cap = (
-      globalThis as { Capacitor?: { isNativePlatform?: () => boolean } }
-    ).Capacitor;
-    return cap?.isNativePlatform?.() === true;
-  } catch {
-    return false;
-  }
-}
-
-function randomId(): string {
+function uuid(): string {
   try {
     if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
       return crypto.randomUUID();
     }
   } catch {
-    /* ignore */
+    /* fall through */
   }
-  // Last-resort fallback. Should never run on supported targets.
-  return `bind-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, "0"));
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
 }
 
-async function readPersisted(): Promise<string | null> {
-  if (isNative()) {
-    const prefs = await getCapPreferences();
-    if (prefs) {
-      try {
-        const res = await prefs.get({ key: STORAGE_KEY });
-        if (res?.value) return res.value;
-      } catch (e) {
-        log.warn("binding", "Preferences.get failed", e);
-      }
-    }
-  }
+export function getDeviceId(): string {
   try {
-    return localStorage.getItem(STORAGE_KEY);
+    const existing = localStorage.getItem(DEVICE_ID_KEY);
+    if (existing) return existing;
+    const id = uuid();
+    localStorage.setItem(DEVICE_ID_KEY, id);
+    return id;
+  } catch {
+    // Storage unavailable — fall back to an ephemeral id.
+    return uuid();
+  }
+}
+
+export interface DeviceBindingRecord {
+  deviceId: string;
+  boundAt: number | object;
+  lastVerifiedAt: number | object;
+  userAgent: string;
+  platform: string;
+  label?: string;
+}
+
+function describeDevice(): { userAgent: string; platform: string } {
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "unknown";
+  const platform =
+    typeof navigator !== "undefined" && navigator.platform
+      ? navigator.platform
+      : "unknown";
+  return { userAgent: ua, platform };
+}
+
+/**
+ * Lists all device bindings for an employee. Empty array on error.
+ */
+export async function listBindings(
+  employeeId: string,
+): Promise<DeviceBindingRecord[]> {
+  if (!employeeId) return [];
+  try {
+    const snap = await get(ref(getDb(), `DeviceBindings/${employeeId}`));
+    const val = snap.val() as Record<string, DeviceBindingRecord> | null;
+    if (!val) return [];
+    return Object.values(val);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Whether the CURRENT device has a binding record for this employee. Returns
+ * `null` when the check cannot be performed (offline, permissions, etc.) —
+ * callers should fail open in that case.
+ */
+export async function isCurrentDeviceBound(
+  employeeId: string,
+): Promise<boolean | null> {
+  if (!employeeId) return false;
+  try {
+    const snap = await get(
+      ref(getDb(), `DeviceBindings/${employeeId}/${getDeviceId()}`),
+    );
+    return snap.exists();
   } catch {
     return null;
   }
 }
 
-async function writePersisted(id: string): Promise<void> {
-  if (isNative()) {
-    const prefs = await getCapPreferences();
-    if (prefs) {
-      try {
-        await prefs.set({ key: STORAGE_KEY, value: id });
-      } catch (e) {
-        log.warn("binding", "Preferences.set failed", e);
-      }
-    }
-  }
+/**
+ * Creates or refreshes the binding record for the current device.
+ * Safe to call after a verified sign-in.
+ */
+export async function bindDevice(
+  employeeId: string,
+  label?: string,
+): Promise<void> {
+  if (!employeeId) return;
+  const deviceId = getDeviceId();
+  const desc = describeDevice();
+  const record: DeviceBindingRecord = {
+    deviceId,
+    boundAt: serverTimestamp(),
+    lastVerifiedAt: serverTimestamp(),
+    userAgent: desc.userAgent,
+    platform: desc.platform,
+    label,
+  };
   try {
-    localStorage.setItem(STORAGE_KEY, id);
+    await set(ref(getDb(), `DeviceBindings/${employeeId}/${deviceId}`), record);
+  } catch {
+    /* best effort */
+  }
+}
+
+export async function touchBinding(employeeId: string): Promise<void> {
+  if (!employeeId) return;
+  try {
+    await set(
+      ref(
+        getDb(),
+        `DeviceBindings/${employeeId}/${getDeviceId()}/lastVerifiedAt`,
+      ),
+      serverTimestamp(),
+    );
   } catch {
     /* ignore */
   }
 }
 
-/**
- * Returns the stable installation ID for this device, generating and
- * persisting one on first call. Safe to invoke from anywhere; cached
- * after the first await.
- */
-export async function getOrCreateBindingId(): Promise<string> {
-  if (_cached) return _cached;
-  const existing = await readPersisted();
-  if (existing && existing.length > 0) {
-    _cached = existing;
-    return existing;
+/** Revokes a binding. Use only after verifying the user's identity. */
+export async function revokeBinding(
+  employeeId: string,
+  deviceId: string,
+): Promise<void> {
+  if (!employeeId || !deviceId) return;
+  try {
+    await remove(ref(getDb(), `DeviceBindings/${employeeId}/${deviceId}`));
+  } catch {
+    /* ignore */
   }
-  const fresh = randomId();
-  _cached = fresh;
-  await writePersisted(fresh);
-  log.info("binding", "generated new device binding id");
-  return fresh;
-}
-
-/**
- * Synchronous read of the cached binding id. Returns null if
- * getOrCreateBindingId() hasn't completed yet; UI code should call
- * the async variant on mount and store the result.
- */
-export function getCachedBindingId(): string | null {
-  return _cached;
-}
-
-/**
- * Compares the local binding id with the value recorded on the
- * profile. Defaults to **false** on any error so callers cannot
- * accidentally treat an unknown state as a match.
- */
-export function bindingMatches(
-  localId: string | null | undefined,
-  profileDeviceId: string | null | undefined,
-): boolean {
-  if (!localId || !profileDeviceId) return false;
-  return localId === profileDeviceId;
-}
-
-/**
- * Test seam: wipe the in-memory cache. Production code never needs
- * to call this — the persisted value is read on next startup.
- */
-export function __resetBindingCacheForTests(): void {
-  _cached = null;
-  _capPreferences = undefined;
 }

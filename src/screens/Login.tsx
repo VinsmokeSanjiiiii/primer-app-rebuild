@@ -4,22 +4,19 @@ import { Button, TextField, Spinner, Dialog } from "../components/ui";
 import { Icon } from "../components/Icon";
 import {
   enrollBiometric,
-  getEnrolledBindingId,
   getEnrolledEmployeeEmail,
   hasEnrolledBiometric,
   isBiometricAvailable,
-  isWebAuthnSupported,
   verifyBiometric,
 } from "../lib/biometric";
 import { requestPasswordReset, verifyOTP, resetPassword } from "../lib/forgot-password";
-
 
 type ForgotStep = "email" | "otp" | "reset" | "done";
 
 const REMEMBER_EMAIL_KEY = "primer_remembered_email";
 
 export function Login() {
-  const { signIn, signInWithEmployeeId, toast, bindingId } = useApp();
+  const { signIn, signInWithEmployeeId, toast } = useApp();
 
   const [email, setEmail] = useState(() => {
     try { return localStorage.getItem(REMEMBER_EMAIL_KEY) ?? ""; } catch { return ""; }
@@ -36,8 +33,6 @@ export function Login() {
   const [bioSupported, setBioSupported] = useState(false);
   const [bioEnrolled, setBioEnrolled] = useState(false);
   const [bioEmail, setBioEmail] = useState<string | null>(null);
-  const [bioBindingMatch, setBioBindingMatch] = useState(true);
-
 
   const [forgotOpen, setForgotOpen] = useState(false);
   const [forgotStep, setForgotStep] = useState<ForgotStep>("email");
@@ -62,10 +57,6 @@ export function Login() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!isWebAuthnSupported()) {
-        if (!cancelled) setBioSupported(false);
-        return;
-      }
       const available = await isBiometricAvailable();
       if (cancelled) return;
       setBioSupported(available);
@@ -73,19 +64,12 @@ export function Login() {
       setBioEnrolled(enrolled);
       const enrolledEmail = getEnrolledEmployeeEmail();
       setBioEmail(enrolledEmail);
-      const enrolledBinding = getEnrolledBindingId();
-      // If the enrollment recorded a binding id, require it to match
-      // the current device. If it didn't (older enrollment), allow it.
-      setBioBindingMatch(
-        !enrolledBinding || !bindingId || enrolledBinding === bindingId,
-      );
       if (enrolled && available && enrolledEmail && !email) {
         setEmail(enrolledEmail);
       }
     })();
     return () => { cancelled = true; };
-  }, [bindingId]);
-
+  }, []);
 
   const validateEmail = (e: string) => e.includes("@") && e.includes(".");
 
@@ -119,18 +103,7 @@ export function Login() {
           displayName: result.fullName ?? trimmedEmail,
         });
         setEnrollOpen(true);
-      } else if (bioSupported && bioEnrolled && !bioBindingMatch && result.employeeId) {
-        // Successful password sign-in on a device whose stored
-        // biometric credential was enrolled elsewhere — offer a
-        // safe re-enroll path.
-        setPendingProfile({
-          employeeId: result.employeeId,
-          email: trimmedEmail,
-          displayName: result.fullName ?? trimmedEmail,
-        });
-        setEnrollOpen(true);
       }
-
     } catch (e) {
       const msg = e instanceof Error ? `Network error: ${e.message}` : "Network error. Please retry.";
       setError(msg);
@@ -158,28 +131,27 @@ export function Login() {
     setError("");
     setBiometric(true);
     try {
-      const verified = await verifyBiometric({ currentBindingId: bindingId });
+      const verified = await verifyBiometric();
       if (!verified.ok) {
-        // Map typed error codes to friendlier UI strings.
-        const friendly =
-          verified.code === "canceled" ? "Cancelled. Try again or use your password."
-          : verified.code === "unsupported" ? "Biometric unlock isn't supported on this device."
-          : verified.code === "binding_mismatch" ? verified.error
-          : verified.code === "not_enrolled" ? "Biometric isn't set up on this device yet. Sign in with your password to enable it."
-          : verified.error;
-        setError(friendly);
-        toast(friendly, "error");
+        // Distinguish biometric/device errors from network errors so the
+        // user gets an accurate message and the right next step.
+        setError(verified.error);
+        toast(verified.error, "error");
         return;
       }
-      const result = await signInWithEmployeeId(verified.employeeId, true);
-      if (!result.success) {
-        setError(result.error || "Biometric unlock failed.");
-        toast(result.error || "Biometric unlock failed.", "error");
+      try {
+        const result = await signInWithEmployeeId(verified.employeeId, true);
+        if (!result.success) {
+          setError(result.error || "Sign-in failed after biometric unlock.");
+          toast(result.error || "Sign-in failed after biometric unlock.", "error");
+        }
+      } catch (e) {
+        const msg = e instanceof Error
+          ? `Network error during sign-in: ${e.message}`
+          : "Network error during sign-in.";
+        setError(msg);
+        toast(msg, "error");
       }
-    } catch (e) {
-      const msg = e instanceof Error ? `Network error: ${e.message}` : "Network error during biometric unlock.";
-      setError(msg);
-      toast(msg, "error");
     } finally {
       setBiometric(false);
     }
@@ -187,14 +159,10 @@ export function Login() {
 
   const handleEnroll = async () => {
     if (!pendingProfile) return;
-    const result = await enrollBiometric({
-      ...pendingProfile,
-      bindingId: bindingId ?? undefined,
-    });
+    const result = await enrollBiometric(pendingProfile);
     if (result.ok) {
       setBioEnrolled(true);
       setBioEmail(pendingProfile.email);
-      setBioBindingMatch(true);
       toast("Biometric unlock enabled on this device.", "success");
     } else {
       toast(result.error, "error");
@@ -202,7 +170,6 @@ export function Login() {
     setEnrollOpen(false);
     setPendingProfile(null);
   };
-
 
   const openForgotDialog = () => {
     setForgotEmail(email.trim());
@@ -385,28 +352,34 @@ export function Login() {
           {loading ? "Verifying…" : "Sign in"}
         </Button>
 
-        {bioSupported && bioEnrolled && bioBindingMatch && (
-          <button
-            type="button"
-            onClick={handleBiometricUnlock}
-            disabled={biometric}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60 dark:border-white/15 dark:text-slate-200 dark:hover:bg-white/5"
-          >
-            <Icon name="fingerprint" size={18} />
-            {biometric ? "Authenticating…" : bioEmail ? `Unlock as ${bioEmail}` : "Unlock with biometrics"}
-          </button>
-        )}
-        {bioSupported && bioEnrolled && !bioBindingMatch && (
-          <p className="text-center text-xs text-amber-600 dark:text-amber-400">
-            Biometric unlock is disabled because this device changed. Sign in with your password to re-enable it.
-          </p>
+        {bioSupported && bioEnrolled && (
+          <div className="space-y-1.5">
+            <button
+              type="button"
+              onClick={handleBiometricUnlock}
+              disabled={biometric}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60 dark:border-white/15 dark:text-slate-200 dark:hover:bg-white/5"
+            >
+              <Icon name="fingerprint" size={18} />
+              {biometric ? "Authenticating…" : bioEmail ? `Unlock as ${bioEmail}` : "Unlock with biometrics"}
+            </button>
+            <p className="text-center text-[11px] text-slate-400">
+              {biometric
+                ? "Confirm with your fingerprint or face."
+                : "Use Face ID / fingerprint / Windows Hello on this device. Password sign-in below still works if biometrics fail."}
+            </p>
+          </div>
         )}
         {bioSupported && !bioEnrolled && (
           <p className="text-center text-xs text-slate-400">
             Sign in once to enable biometric unlock on this device.
           </p>
         )}
-
+        {!bioSupported && (
+          <p className="text-center text-[11px] text-slate-400">
+            Biometric unlock isn't available on this device — use password sign-in above.
+          </p>
+        )}
       </div>
 
       <div className="mt-8 rounded-xl bg-slate-100/70 p-3 text-center text-xs text-slate-500 dark:bg-white/5 dark:text-slate-400">
