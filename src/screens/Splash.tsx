@@ -1,44 +1,64 @@
 import { useEffect, useState } from "react";
 import { Icon } from "../components/Icon";
+import { useApp } from "../store";
 
-const SESSION_KEY = "primer_portal_session";
-
+/**
+ * Splash screen driven by a real startup state machine. The store
+ * exposes `runStartupChecks()` which executes:
+ *   1. resolve device binding id
+ *   2. load local app version
+ *   3. fetch remote /AppVersion node
+ *   4. compare versions and stash the decision in the store
+ *   5. fire-and-forget sync the client snapshot to RTDB
+ *   6. restore session from prior repository state
+ *
+ * Each step updates a status string we render here. Failures fall
+ * through to a generic "ready" outcome so the app keeps working
+ * when the network or version node is broken.
+ */
 export function Splash({ onDone }: { onDone: () => void }) {
+  const { runStartupChecks } = useApp();
   const [progress, setProgress] = useState(0);
-  const [online] = useState(() => navigator.onLine);
-  const [status, setStatus] = useState("Checking connection…");
+  const [status, setStatus] = useState("Starting…");
+  const [online, setOnline] = useState(() =>
+    typeof navigator === "undefined" ? true : navigator.onLine,
+  );
 
   useEffect(() => {
-    const hasSession = !!(
-      localStorage.getItem(SESSION_KEY) ??
-      sessionStorage.getItem(SESSION_KEY)
-    );
+    const onOnline = () => setOnline(true);
+    const onOffline = () => setOnline(false);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
 
-    if (!online) {
-      setStatus("No internet connection. Retrying…");
-    }
-
-    const steps = [
-      { p: 20, s: online ? "Connection verified." : "Retrying connection…" },
-      { p: 45, s: "Verifying device binding…" },
-      { p: 65, s: hasSession ? "Restoring secure session…" : "Loading secure session…" },
-      { p: 85, s: "Preparing your workspace…" },
-      { p: 100, s: "Ready" },
-    ];
-
-    let i = 0;
-    const t = setInterval(() => {
-      if (i < steps.length) {
-        setProgress(steps[i].p);
-        setStatus(steps[i].s);
-        i++;
-      } else {
-        clearInterval(t);
-        setTimeout(onDone, 300);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await runStartupChecks((step) => {
+          if (cancelled) return;
+          setStatus(step.label);
+          setProgress(step.progress);
+        });
+      } catch {
+        // Never block the app on startup-check failure.
+        if (!cancelled) setStatus("Ready");
       }
-    }, 420);
-    return () => clearInterval(t);
-  }, [online, onDone]);
+      if (cancelled) return;
+      setProgress(100);
+      // Tiny delay so the final status has a chance to render.
+      setTimeout(() => {
+        if (!cancelled) onDone();
+      }, 220);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [runStartupChecks, onDone]);
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-8 bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 px-10 text-white">

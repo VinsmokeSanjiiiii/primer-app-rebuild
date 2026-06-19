@@ -18,8 +18,8 @@ import { Profile } from "./screens/Profile";
 import { Notifications } from "./screens/Notifications";
 import type { ScreenId } from "./types";
 import { applySystemBars } from "./lib/systemBars";
-import { UpdateGate } from "./components/UpdateGate";
-import { LoadingState } from "./components/States";
+import { AppUpdateModal } from "./components/AppUpdateModal";
+
 
 const NAV: { id: ScreenId; label: string; icon: IconName }[] = [
   { id: "dashboard", label: "Home", icon: "home" },
@@ -45,19 +45,20 @@ const SCREENS: Record<ScreenId, () => React.ReactElement> = {
 };
 
 function Shell() {
-  const { screen, navigate, isAuthed, toasts, hasHydrated, navBlur } = useApp();
+  const { screen, navigate, isAuthed, toasts, hasHydrated } = useApp();
   const Screen = SCREENS[screen];
   const showNav = (["dashboard", "attendance", "requests", "profile"] as ScreenId[]).includes(screen);
-
-  const navClass = navBlur
-    ? "bg-white/85 backdrop-blur-md dark:bg-slate-900/80"
-    : "bg-white dark:bg-slate-900";
 
   return (
     <div className="flex h-full flex-col bg-slate-50 safe-top dark:bg-slate-950">
       <div className="flex-1 overflow-y-auto">
         {!hasHydrated ? (
-          <LoadingState />
+          <div className="flex h-full items-center justify-center">
+            <div className="flex flex-col items-center gap-3">
+              <div className="h-10 w-10 animate-spin rounded-full border-4 border-indigo-200 border-t-indigo-600" />
+              <p className="text-sm font-semibold text-slate-400">Loading…</p>
+            </div>
+          </div>
         ) : isAuthed ? (
           <Screen />
         ) : (
@@ -67,7 +68,7 @@ function Shell() {
 
       {/* Bottom nav */}
       {isAuthed && showNav && (
-        <nav className={`flex items-center justify-around border-t border-slate-200/70 px-2 py-1.5 safe-bottom dark:border-white/10 ${navClass}`}>
+        <nav className="flex items-center justify-around border-t border-slate-200/70 bg-white/90 px-2 py-1.5 safe-bottom backdrop-blur-md dark:border-white/10 dark:bg-slate-900/90">
           {NAV.map((n) => {
             const active = screen === n.id;
             return (
@@ -107,7 +108,7 @@ function Shell() {
 }
 
 function Root() {
-  const { dark } = useApp();
+  const { dark, updateDecision, updateModalOpen, dismissUpdate } = useApp();
   const [booted, setBooted] = useState(false);
 
   useEffect(() => {
@@ -128,18 +129,23 @@ function Root() {
           ) : (
             <Shell />
           )}
+          {/* Global update gate. Sits above the entire shell so a forced
+              update blocks all navigation, and an optional one is
+              dismissible. */}
+          {booted && updateModalOpen && updateDecision && (
+            <AppUpdateModal decision={updateDecision} onDismiss={dismissUpdate} />
+          )}
         </div>
       </div>
     </div>
   );
 }
 
+
 export default function App() {
   return (
     <AppProvider>
-      <UpdateGate>
-        <Root />
-      </UpdateGate>
+      <Root />
     </AppProvider>
   );
 }

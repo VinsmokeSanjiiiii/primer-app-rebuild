@@ -2,20 +2,11 @@
 include ':capacitor-android'
 project(':capacitor-android').projectDir = new File('../node_modules/.pnpm/@capacitor+android@8.4.0_@capacitor+core@8.4.0/node_modules/@capacitor/android/capacitor')
 
-include ':capacitor-app'
-project(':capacitor-app').projectDir = new File('../node_modules/.pnpm/@capacitor+app@8.1.0_@capacitor+core@8.4.0/node_modules/@capacitor/app/android')
-
-include ':capacitor-filesystem'
-project(':capacitor-filesystem').projectDir = new File('../node_modules/.pnpm/@capacitor+filesystem@8.1.2_@capacitor+core@8.4.0/node_modules/@capacitor/filesystem/android')
-
 include ':capacitor-local-notifications'
 project(':capacitor-local-notifications').projectDir = new File('../node_modules/.pnpm/@capacitor+local-notifications@8.2.0_@capacitor+core@8.4.0/node_modules/@capacitor/local-notifications/android')
 
 include ':capacitor-status-bar'
 project(':capacitor-status-bar').projectDir = new File('../node_modules/.pnpm/@capacitor+status-bar@8.0.2_@capacitor+core@8.4.0/node_modules/@capacitor/status-bar/android')
-
-include ':capawesome-team-capacitor-file-opener'
-project(':capawesome-team-capacitor-file-opener').projectDir = new File('../node_modules/.pnpm/@capawesome-team+capacitor-_2d34ced516fd96a8709810248265873f/node_modules/@capawesome-team/capacitor-file-opener/android')
 
 include ':hugotomazi-capacitor-navigation-bar'
 project(':hugotomazi-capacitor-navigation-bar').projectDir = new File('../node_modules/.pnpm/@hugotomazi+capacitor-navig_41acaf11504ddd96952f187cb5acf622/node_modules/@hugotomazi/capacitor-navigation-bar/android')

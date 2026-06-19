@@ -1,23 +1,82 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApp } from "../store";
 import { AppBar } from "../components/AppBar";
 import { Card, Button, Badge, Avatar, Field, SectionTitle, Dialog, TextField, TextArea } from "../components/ui";
 import { Icon, type IconName } from "../components/Icon";
 import { tenureFrom } from "../lib/date";
+import {
+  clearEnrolledBiometric,
+  getEnrolledBindingId,
+  hasEnrolledBiometric,
+  isBiometricAvailable,
+} from "../lib/biometric";
+import { getProfileDeviceId } from "../data/appVersionRepo";
 
 export function Profile() {
-  const { profile, updateProfile, signOut, navigate, toggleDark, dark, toast, themeMode, setThemeMode, navBlur, setNavBlur } = useApp();
+  const { profile, updateProfile, signOut, navigate, toggleDark, dark, toast, bindingId, rebindDevice } = useApp();
+
   const fileRef = useRef<HTMLInputElement>(null);
   const [pwOpen, setPwOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [govOpen, setGovOpen] = useState(false);
   const [logoutOpen, setLogoutOpen] = useState(false);
+  const [rebindOpen, setRebindOpen] = useState(false);
+  const [rebindBusy, setRebindBusy] = useState(false);
+
+  // Device binding + biometric status (read once on mount and after
+  // rebind actions; we never mutate auth state from this screen).
+  const [bioAvailable, setBioAvailable] = useState(false);
+  const [bioEnabled, setBioEnabled] = useState(false);
+  const [profileDeviceId, setProfileDeviceIdState] = useState<string | null>(null);
+  const enrolledBinding = getEnrolledBindingId();
+  const isBound = !!bindingId && !!profileDeviceId && bindingId === profileDeviceId;
+  const bioBindingOk = !enrolledBinding || enrolledBinding === bindingId;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const ok = await isBiometricAvailable();
+      if (!cancelled) setBioAvailable(ok);
+      if (!cancelled) setBioEnabled(hasEnrolledBiometric());
+      if (profile.employeeId) {
+        const pid = await getProfileDeviceId(profile.employeeId);
+        if (!cancelled) setProfileDeviceIdState(pid);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [profile.employeeId, bindingId]);
+
+  const handleDisableBiometric = () => {
+    clearEnrolledBiometric();
+    setBioEnabled(false);
+    toast("Biometric unlock disabled on this device.", "success");
+  };
+
+  const handleRebind = async () => {
+    setRebindBusy(true);
+    try {
+      const r = await rebindDevice();
+      if (r.ok) {
+        if (profile.employeeId) {
+          const pid = await getProfileDeviceId(profile.employeeId);
+          setProfileDeviceIdState(pid);
+        }
+        setRebindOpen(false);
+      } else {
+        toast(r.error ?? "Rebind failed.", "error");
+      }
+    } finally {
+      setRebindBusy(false);
+    }
+  };
 
   const [notesDraft, setNotesDraft] = useState(profile.notes);
   const [gov, setGov] = useState({
     philhealth: profile.philhealth, sss: profile.sss, tin: profile.tin, pagIbig: profile.pagIbig,
   });
   const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
+
+
 
   const onImage = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -118,42 +177,36 @@ export function Profile() {
           </div>
         </Card>
 
-        {/* Appearance */}
-        <SectionTitle>Appearance</SectionTitle>
-        <Card className="space-y-4">
-          <div>
-            <p className="mb-2 text-xs font-semibold text-slate-500 dark:text-slate-400">Theme</p>
-            <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1 dark:bg-white/5">
-              {(["system", "light", "dark"] as const).map((m) => {
-                const active = themeMode === m;
-                const iconName: IconName = m === "system" ? "refresh" : m === "light" ? "sun" : "moon";
-                return (
-                  <button
-                    key={m}
-                    onClick={() => setThemeMode(m)}
-                    className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-bold capitalize transition ${
-                      active
-                        ? "bg-white text-indigo-600 shadow-sm dark:bg-slate-800 dark:text-indigo-300"
-                        : "text-slate-500 dark:text-slate-400"
-                    }`}
-                  >
-                    <Icon name={iconName} size={14} />
-                    {m}
-                  </button>
-                );
-              })}
+        {/* Security & device */}
+        <SectionTitle>Security & device</SectionTitle>
+        <Card>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">This device</p>
+                <p className="text-xs text-slate-400">
+                  {isBound ? "Bound to your account" : profileDeviceId ? "Different device is bound to your account" : "Not yet bound"}
+                </p>
+              </div>
+              <Badge tone={isBound ? "green" : profileDeviceId ? "amber" : "slate"}>
+                {isBound ? "Bound" : profileDeviceId ? "Mismatch" : "Unbound"}
+              </Badge>
             </div>
-            <p className="mt-1.5 text-[11px] text-slate-400">
-              {themeMode === "system" ? `Following device · currently ${dark ? "dark" : "light"}` : "Manual override"}
-            </p>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Biometric unlock</p>
+                <p className="text-xs text-slate-400">
+                  {!bioAvailable ? "Unsupported on this device"
+                    : !bioEnabled ? "Not enabled"
+                    : !bioBindingOk ? "Disabled — device changed"
+                    : "Enabled"}
+                </p>
+              </div>
+              <Badge tone={bioEnabled && bioBindingOk ? "green" : "slate"}>
+                {bioEnabled && bioBindingOk ? "On" : "Off"}
+              </Badge>
+            </div>
           </div>
-
-          <ToggleRow
-            label="Nav bar blur"
-            hint="Frosted blur effect on top and bottom bars"
-            value={navBlur}
-            onChange={setNavBlur}
-          />
         </Card>
 
         {/* Shortcuts */}
@@ -162,11 +215,33 @@ export function Profile() {
           <NavRow icon="calendar" label="Change leave/OT date" onClick={() => navigate("change-leave")} />
           <NavRow icon="alert" label="Infractions" onClick={() => navigate("infractions")} />
           <NavRow icon="lock" label="Change password" onClick={() => setPwOpen(true)} />
+          {!isBound && (
+            <NavRow icon="shield" label="Bind this device to my account" onClick={() => setRebindOpen(true)} />
+          )}
+          {bioEnabled && (
+            <NavRow icon="fingerprint" label="Disable biometric unlock" onClick={handleDisableBiometric} />
+          )}
           <NavRow icon="logout" label="Log out" onClick={() => setLogoutOpen(true)} danger />
         </div>
 
         <p className="pb-2 text-center text-xs text-slate-400">Primer Communications · Employee Self-Service</p>
       </div>
+
+      {/* Rebind dialog */}
+      <Dialog open={rebindOpen} onClose={() => setRebindOpen(false)} title="Bind this device?"
+        footer={<>
+          <Button variant="secondary" full onClick={() => setRebindOpen(false)} disabled={rebindBusy}>Cancel</Button>
+          <Button full onClick={handleRebind} disabled={rebindBusy}>
+            {rebindBusy ? "Binding…" : "Bind device"}
+          </Button>
+        </>}>
+        <p className="text-sm text-slate-600 dark:text-slate-300">
+          You're signed in as <span className="font-semibold">{profile.fullName || profile.employeeId}</span>.
+          Binding this device replaces the previous device on your account so biometric unlock works here.
+        </p>
+      </Dialog>
+
+
 
       {/* Notes dialog */}
       <Dialog open={notesOpen} onClose={() => setNotesOpen(false)} title="Edit notes"
@@ -236,32 +311,6 @@ function NavRow({ icon, label, onClick, danger }: { icon: IconName; label: strin
       </div>
       <span className={`flex-1 text-sm font-semibold ${danger ? "text-rose-600 dark:text-rose-300" : "text-slate-700 dark:text-slate-200"}`}>{label}</span>
       <Icon name="chevron" size={18} className="text-slate-300" />
-    </button>
-  );
-}
-
-function ToggleRow({ label, hint, value, onChange }: { label: string; hint?: string; value: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button
-      type="button"
-      onClick={() => onChange(!value)}
-      className="flex w-full items-center justify-between gap-3 text-left"
-    >
-      <div>
-        <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">{label}</p>
-        {hint && <p className="text-[11px] text-slate-400">{hint}</p>}
-      </div>
-      <span
-        className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition ${
-          value ? "bg-indigo-600" : "bg-slate-300 dark:bg-white/15"
-        }`}
-      >
-        <span
-          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${
-            value ? "translate-x-5" : "translate-x-0.5"
-          }`}
-        />
-      </span>
     </button>
   );
 }
