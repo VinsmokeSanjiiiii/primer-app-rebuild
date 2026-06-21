@@ -3,6 +3,7 @@ import { useApp } from "../store";
 import { AppBar } from "../components/AppBar";
 import { Card, Button, Badge, Avatar, Field, SectionTitle, Dialog, TextField, TextArea } from "../components/ui";
 import { Icon, type IconName } from "../components/Icon";
+import { PullToRefresh } from "../components/PullToRefresh";
 import { tenureFrom } from "../lib/date";
 import { APP_VERSION } from "../lib/appVersion";
 import { bootController, useBootState } from "../lib/bootState";
@@ -10,7 +11,7 @@ import { downloadAndInstallApk } from "../lib/updateCheck";
 import { Capacitor } from "@capacitor/core";
 
 export function Profile() {
-  const { profile, updateProfile, signOut, navigate, toggleDark, dark, toast, themeMode, setThemeMode } = useApp();
+  const { profile, updateProfile, signOut, navigate, toggleDark, dark, toast, themeMode, setThemeMode, refreshData } = useApp();
   const fileRef = useRef<HTMLInputElement>(null);
   const [pwOpen, setPwOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
@@ -46,7 +47,8 @@ export function Profile() {
           </button>
         }
       />
-      <div className="flex-1 space-y-4 overflow-y-auto px-4 pb-6 pt-4">
+      <PullToRefresh className="flex-1 px-4 pb-6 pt-4" onRefresh={refreshData}>
+        <div className="space-y-4">
         {/* Header */}
         <Card className="text-center">
           <div className="relative mx-auto w-fit">
@@ -175,7 +177,8 @@ export function Profile() {
             </div>
           </Card>
                   <p className="pb-2 text-center text-xs text-slate-400">Primer Communications · Employee Self-Service</p>
-      </div>
+        </div>
+      </PullToRefresh>
 
       {/* Notes dialog */}
       <Dialog open={notesOpen} onClose={() => setNotesOpen(false)} title="Edit notes"

@@ -50,6 +50,7 @@ import {
   equalTo,
   remove,
   serverTimestamp,
+  onValue,
 } from "firebase/database";
 
 // ---------------------------------------------------------------------------
@@ -73,6 +74,7 @@ export interface Repository {
 
   // Leave requests
   getLeaves(employeeId: string): Promise<LeaveRequest[]>;
+  subscribeLeaves(employeeId: string, callback: (leaves: LeaveRequest[]) => void): () => void;
   createLeave(request: LeaveRequest): Promise<void>;
   updateLeave(id: string, patch: Partial<LeaveRequest>): Promise<void>;
 
@@ -166,6 +168,10 @@ class LocalOfflineRepository implements Repository {
 
   async getLeaves(_id: string) {
     return seedLeaves;
+  }
+  subscribeLeaves(_id: string, callback: (leaves: LeaveRequest[]) => void): () => void {
+    void Promise.resolve(seedLeaves).then(callback);
+    return () => {};
   }
   async createLeave(_r: LeaveRequest) {
     /* read-only offline */
@@ -646,6 +652,32 @@ export class FirebaseRepository implements Repository {
     );
   }
 
+  subscribeLeaves(employeeId: string, callback: (leaves: LeaveRequest[]) => void): () => void {
+    const dbRef = ref(this.db, "LeaveRequests");
+    return onValue(dbRef, (snap) => {
+      const raw = toObject<Record<string, FbLeaveRecord>>(snap) ?? {};
+      const grouped = new Map<string, LeaveRequest>();
+      for (const [key, rec] of Object.entries(raw)) {
+        if (asString(rec.Employee_ID_Number) !== employeeId) continue;
+        const item = mapLeave(key, rec);
+        if (!item) continue;
+        const rid = item.requestId;
+        const existing = grouped.get(rid);
+        if (existing) {
+          existing.leaveDate = Array.from(
+            new Set([...existing.leaveDate, ...item.leaveDate]),
+          ).sort();
+          existing.days = existing.leaveDate.length;
+        } else {
+          grouped.set(rid, item);
+        }
+      }
+      callback(
+        Array.from(grouped.values()).sort((a, b) => b.createdAt - a.createdAt),
+      );
+    });
+  }
+
   async createLeave(request: LeaveRequest) {
     for (const d of request.leaveDate) {
       const key = this.leaveRecordId(request.requestId, d);
@@ -1103,29 +1135,32 @@ function mapCoverage(id: string, rec: FbCoverageRecord): CoverageRequest {
 }
 
 function mapCoverageToFb(c: CoverageRequest): Record<string, unknown> {
+  // Firebase RTDB rejects any field whose value is `undefined`. Optional
+  // fields (CoveredbyID, TakenBy, CoveredHours) must be given a safe default
+  // when absent so that `set()` never receives undefined values.
   return {
     CoverageID: c.coverageId,
     CoverageDate: c.coverageDate,
-    CoverageTime: c.coverageTime,
-    CoveragePosition: c.position,
-    month: c.month,
-    year: c.year,
-    CoverageType: c.coverageType,
-    forCoverageHours: c.forCoverageHours,
-    CoverageStatus: c.coverageStatus,
-    CoveredbyID: c.coveredById,
-    TakenBy: c.takenBy,
-    Days_Off: c.daysOff,
-    Position: c.position,
-    Employee_ID_Number: c.requesterId,
-    CoveredHours: c.coveredHours,
+    CoverageTime: c.coverageTime ?? "",
+    CoveragePosition: c.position ?? "",
+    month: c.month ?? "",
+    year: c.year ?? new Date().getFullYear(),
+    CoverageType: c.coverageType ?? "",
+    forCoverageHours: c.forCoverageHours ?? 0,
+    CoverageStatus: c.coverageStatus ?? "Available",
+    CoveredbyID: c.coveredById ?? "",
+    TakenBy: c.takenBy ?? "",
+    Days_Off: c.daysOff ?? "",
+    Position: c.position ?? "",
+    Employee_ID_Number: c.requesterId ?? "",
+    CoveredHours: c.coveredHours ?? 0,
     Phone_Name: c.phoneName ?? "",
-    Schedule: c.schedule,
-    Team: c.team,
-    requesterId: c.requesterId,
-    Full_Name: c.requesterName,
-    requesterName: c.requesterName,
-    Reason: c.reason,
+    Schedule: c.schedule ?? "",
+    Team: c.team ?? "",
+    requesterId: c.requesterId ?? "",
+    Full_Name: c.requesterName ?? "",
+    requesterName: c.requesterName ?? "",
+    Reason: c.reason ?? "",
   };
 }
 

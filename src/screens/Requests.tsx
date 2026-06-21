@@ -3,6 +3,7 @@ import { useApp } from "../store";
 import { AppBar } from "../components/AppBar";
 import { Card, Button, Badge, EmptyState, Dialog, TextArea, TextField } from "../components/ui";
 import { Icon } from "../components/Icon";
+import { PullToRefresh } from "../components/PullToRefresh";
 import { StatusBadge } from "./Dashboard";
 import { parseDate, startOfDay, serverNow, currentServerMonth, currentServerYear } from "../lib/date";
 import { DateFilter } from "../components/DateFilter";
@@ -17,7 +18,7 @@ function buildYears(): string[] {
 }
 
 export function Requests() {
-  const { leaves, ot, cancelLeave, cancelOt, navigate } = useApp();
+  const { leaves, ot, cancelLeave, cancelOt, navigate, refreshData } = useApp();
   const [tab, setTab] = useState<"leave" | "ot">("leave");
   const [search, setSearch] = useState("");
   const [filterMonth, setFilterMonth] = useState("All");
@@ -78,7 +79,8 @@ export function Requests() {
           </button>
         }
       />
-      <div className="flex-1 space-y-4 overflow-y-auto px-4 pb-6 pt-4">
+      <PullToRefresh className="flex-1 px-4 pb-6 pt-4" onRefresh={refreshData}>
+        <div className="space-y-4">
         {/* Tab bar */}
         <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-white/5">
           {(["leave", "ot"] as const).map((t) => (
@@ -174,7 +176,8 @@ export function Requests() {
             ))}
           </div>
         )}
-      </div>
+        </div>
+      </PullToRefresh>
 
       <Dialog
         open={!!cancelTarget}

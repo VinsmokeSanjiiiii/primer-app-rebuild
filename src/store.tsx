@@ -187,6 +187,9 @@ interface AppState {
   toasts: Toast[];
   toast: (text: string, kind?: Toast["kind"]) => void;
 
+  // manual refresh (for pull-to-refresh)
+  refreshData: () => Promise<void>;
+
   // internal
   hasHydrated: boolean;
 }
@@ -512,6 +515,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     })();
   }, [repo, hasHydrated, hydrateAll]);
+
+  // ---- refreshData: manual re-hydration for pull-to-refresh ----
+  const refreshData = useCallback(async () => {
+    if (!session?.employeeId) return;
+    await hydrateAll(session.employeeId);
+  }, [session?.employeeId, hydrateAll]);
+
+  // ---- real-time leaves listener ----
+  // Subscribes to Firebase LeaveRequests via onValue so the UI updates
+  // instantly when an admin approves/rejects a leave without a manual refresh.
+  useEffect(() => {
+    if (!profile?.employeeId) return;
+    const empId = profile.employeeId;
+    return repo.subscribeLeaves(empId, (freshLeaves) => {
+      setLeaves(freshLeaves);
+    });
+  }, [profile?.employeeId, repo]);
 
   // Re-reconcile the active clock session whenever the user comes back to
   // the tab/app or the device comes back online. This catches the case
@@ -1056,6 +1076,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       deleteNotification,
       toasts,
       toast,
+      refreshData,
       hasHydrated,
     }),
     [
@@ -1063,7 +1084,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       profile, attendance, leaves, ot, coverage, infractions, holidays, notifications,
       clockIn, clockOut, clockBusy, updateNote, submitLeave, cancelLeave, submitOt, cancelOt,
       submitTechCoverage, takeoverCoverage, cancelCoverage, changeLeaveDate, updateProfile,
-      markNotificationRead, deleteNotification, toasts, toast, hasHydrated,
+      markNotificationRead, deleteNotification, toasts, toast, refreshData, hasHydrated,
     ],
   );
 

@@ -89,7 +89,7 @@ export function Splash({ onDone }: { onDone: () => void }) {
   return (
     <div className="relative flex h-full flex-col items-center justify-center gap-8 bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 px-10 text-white">
       <div className="flex flex-col items-center gap-4">
-        <div className="flex h-20 w-20 items-center justify-center rounded-3xl overflow-hidden shadow-xl ring-1 ring-white/30">
+        <div className="flex h-20 w-20 items-center justify-center rounded-3xl overflow-hidden shadow-xl ring-1 ring-white/30 bg-white">
           <img src="/icon-512.png" alt="Primer Communications" className="h-full w-full object-cover" />
         </div>
         <div className="text-center">

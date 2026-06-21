@@ -3,11 +3,12 @@ import { useApp } from "../store";
 import { AppBar } from "../components/AppBar";
 import { Card, Button, Dialog, TextArea, EmptyState, Badge } from "../components/ui";
 import { Icon } from "../components/Icon";
+import { PullToRefresh } from "../components/PullToRefresh";
 import { parseDate, noteIsLocked, NOTE_LOCK_HOURS } from "../lib/date";
 import type { AttendanceRecord } from "../types";
 
 export function Attendance() {
-  const { attendance, updateNote } = useApp();
+  const { attendance, updateNote, refreshData } = useApp();
   const today = new Date();
   const ago = new Date();
   ago.setDate(ago.getDate() - 90);
@@ -50,7 +51,8 @@ export function Attendance() {
   return (
     <div className="flex h-full flex-col">
       <AppBar title="Attendance" subtitle="History & notes" />
-      <div className="flex-1 space-y-4 overflow-y-auto px-4 pb-6 pt-4">
+      <PullToRefresh className="flex-1 px-4 pb-6 pt-4" onRefresh={refreshData}>
+        <div className="space-y-4">
         {/* Filter */}
         <Card>
           <p className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-400">
@@ -134,7 +136,8 @@ export function Attendance() {
             })}
           </div>
         )}
-      </div>
+        </div>
+      </PullToRefresh>
 
       {/* Edit note dialog */}
       <Dialog

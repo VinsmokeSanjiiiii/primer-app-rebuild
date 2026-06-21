@@ -269,7 +269,7 @@ export function Login() {
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-gradient-to-b from-indigo-50 to-white px-6 pb-8 pt-12 dark:from-slate-900 dark:to-slate-950">
       <div className="mb-8 flex flex-col items-center gap-3">
-        <div className="flex h-16 w-16 items-center justify-center rounded-2xl overflow-hidden shadow-lg shadow-indigo-300/40">
+        <div className="flex h-16 w-16 items-center justify-center rounded-2xl overflow-hidden shadow-lg shadow-indigo-300/40 bg-white">
           <img src="/icon-512.png" alt="Primer Communications" className="h-full w-full object-cover" />
         </div>
         <div className="text-center">
