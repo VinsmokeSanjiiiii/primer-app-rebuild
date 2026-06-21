@@ -49,6 +49,20 @@ import { cancelShiftReminders } from "./lib/reminders";
 // ---------------------------------------------------------------------------
 const SESSION_KEY = "primer_portal_session";
 const THEME_KEY = "primer_portal_theme";
+const NAV_BLUR_KEY = "primer_portal_nav_blur";
+
+export type ThemeMode = "system" | "light" | "dark";
+
+function prefersDark(): boolean {
+  if (typeof window === "undefined" || !window.matchMedia) return false;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function readThemeMode(): ThemeMode {
+  const raw = (typeof localStorage !== "undefined" && localStorage.getItem(THEME_KEY)) || "";
+  if (raw === "light" || raw === "dark" || raw === "system") return raw;
+  return "system";
+}
 
 // ---------------------------------------------------------------------------
 // Default empty profile for unauthenticated state
@@ -128,7 +142,13 @@ interface AppState {
 
   // theme
   dark: boolean;
+  themeMode: ThemeMode;
+  setThemeMode: (m: ThemeMode) => void;
   toggleDark: () => void;
+
+  // appearance
+  navBlur: boolean;
+  setNavBlur: (v: boolean) => void;
 
   // navigation
   screen: ScreenId;
@@ -161,6 +181,7 @@ interface AppState {
   changeLeaveDate: (kind: "leave" | "ot", id: string, newDate: string) => void;
   updateProfile: (patch: Partial<Profile>) => void;
   markNotificationRead: (id: string) => void;
+  deleteNotification: (id: string) => void;
 
   // toasts
   toasts: Toast[];
@@ -201,10 +222,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   });
 
-  // ---- theme ----
-  const [dark, setDark] = useState<boolean>(() => {
-    return localStorage.getItem(THEME_KEY) === "dark";
+  // ---- theme (tri-state: system | light | dark) ----
+  const [themeMode, setThemeModeState] = useState<ThemeMode>(() => readThemeMode());
+  const [systemDark, setSystemDark] = useState<boolean>(() => prefersDark());
+  const dark = themeMode === "system" ? systemDark : themeMode === "dark";
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    mql.addEventListener?.("change", onChange);
+    return () => mql.removeEventListener?.("change", onChange);
+  }, []);
+
+  const setThemeMode = useCallback((m: ThemeMode) => {
+    localStorage.setItem(THEME_KEY, m);
+    setThemeModeState(m);
+  }, []);
+
+  // ---- appearance: nav blur ----
+  const [navBlur, setNavBlurState] = useState<boolean>(() => {
+    const raw = localStorage.getItem(NAV_BLUR_KEY);
+    return raw === null ? true : raw === "true";
   });
+  const setNavBlur = useCallback((v: boolean) => {
+    localStorage.setItem(NAV_BLUR_KEY, String(v));
+    setNavBlurState(v);
+  }, []);
 
   // ---- navigation ----
   const [screen, setScreen] = useState<ScreenId>("dashboard");
@@ -353,11 +397,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     repo.signOut().catch(() => {});
   }, [repo]);
 
-  // ---- theme ----
+  // ---- theme: legacy toggle cycles system → light → dark → system ----
   const toggleDark = useCallback(() => {
-    setDark((d) => {
-      const next = !d;
-      localStorage.setItem(THEME_KEY, next ? "dark" : "light");
+    setThemeModeState((prev) => {
+      const next: ThemeMode = prev === "system" ? "light" : prev === "light" ? "dark" : "system";
+      localStorage.setItem(THEME_KEY, next);
       return next;
     });
   }, []);
@@ -485,11 +529,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         note: "",
         noteLocked: false,
         minsLate: 0,
+        phoneName: profile.phoneName,
+        team: profile.team,
+        workSetup: profile.workSetup,
         recordType: profile.isFlextime ? "Flextime" : "Regular",
         status: "Open",
         isClockedIn: true,
         month: monthName(now),
         year: phtYear(now),
+        aBonus: 0,
+        rHoliday: 0,
+        sHoliday: 0,
+        infraction: 0,
       };
 
       // Persist the durable backup BEFORE touching React state or Firebase.
@@ -631,7 +682,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const submitLeave = useCallback<AppState["submitLeave"]>(
     (lr) => {
       // Vacation Leave: auto-approve, allow negative credits capped at -12
-      // Sick Leave: always pending (no auto-approve)
+      // Sick Leave / Bereavement / Birthday: always pending
       const autoApprove = lr.leaveType === "Vacation Leave";
       const status = autoApprove ? "Approved" : "Pending";
 
@@ -642,29 +693,70 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
         status,
       };
-      setLeaves((prev) => [full, ...prev]);
-      void safeWrite("Leave request", () => repo.createLeave(full), { critical: true, retries: 2, toast });
 
-      // Credit handling
-      setProfile((p) => {
-        if (!p) return p;
-        let next = { ...p };
-        if (lr.leaveType === "Vacation Leave") {
-          // Allow negative credits, cap at -12
-          const newCredits = p.vlCredits - lr.days;
-          next = { ...p, vlCredits: Math.max(-12, newCredits) };
-        } else if (lr.leaveType === "Sick Leave") {
-          // Sick leave can be used even at 0 credits
-          next = { ...p, slCredits: Math.max(0, p.slCredits - lr.days) };
-        } else if (lr.leaveType === "Birthday Leave") {
-          next = { ...p, blCredit: Math.max(0, p.blCredit - 1) };
+      // Optimistic: add to local list first so the UI reflects the request
+      setLeaves((prev) => [full, ...prev]);
+
+      void (async () => {
+        // Await the write — do NOT deduct credits until we know it landed
+        const result = await safeWrite("Leave request", () => repo.createLeave(full), { critical: true, retries: 2, toast });
+
+        if (!result.ok) {
+          // Write failed — roll back the optimistic leave entry
+          setLeaves((prev) => prev.filter((l) => l.id !== full.id));
+          return;
         }
-        persistProfile(next);
-        return next;
-      });
-      toast(`${lr.leaveType} request ${autoApprove ? "approved" : "submitted"}.`, "success");
+
+        // Write succeeded — now deduct credits and persist the profile
+        setProfile((p) => {
+          if (!p) return p;
+          let next = { ...p };
+          if (lr.leaveType === "Vacation Leave") {
+            const newCredits = p.vlCredits - lr.days;
+            next = { ...p, vlCredits: Math.max(-12, newCredits) };
+          } else if (lr.leaveType === "Sick Leave") {
+            next = { ...p, slCredits: Math.max(0, p.slCredits - lr.days) };
+          } else if (lr.leaveType === "Birthday Leave") {
+            next = { ...p, blCredit: Math.max(0, p.blCredit - 1) };
+          }
+          persistProfile(next);
+          return next;
+        });
+
+        // Auto-approved VL → create a coverage slot so a teammate can fill in
+        if (autoApprove && profile) {
+          for (const d of full.leaveDate) {
+            const covId = `CV-${Math.floor(Math.random() * 9000 + 1000)}`;
+            const cov: CoverageRequest = {
+              id: newId(),
+              coverageId: covId,
+              employeeId: profile.employeeId,
+              requesterId: profile.employeeId,
+              requesterName: profile.fullName,
+              phoneName: profile.phoneName,
+              coverageDate: d,
+              coverageTime: profile.schedule,
+              coverageType: "Leave",
+              coverageStatus: "Available",
+              forCoverageHours: 8,
+              daysOff: profile.daysOff,
+              position: profile.position,
+              schedule: profile.schedule,
+              month: lr.month,
+              year: lr.year,
+              team: profile.team,
+              reason: `Coverage for ${lr.leaveType} on ${d}`,
+              createdAt: Date.now(),
+            };
+            setCoverage((prev) => [cov, ...prev]);
+            void safeWrite("Coverage for leave", () => repo.createCoverage(cov), { retries: 2 });
+          }
+        }
+
+        toast(`${lr.leaveType} request ${autoApprove ? "approved" : "submitted"}.`, "success");
+      })();
     },
-    [toast, repo, persistProfile],
+    [toast, repo, persistProfile, profile],
   );
 
   const cancelLeave = useCallback(
@@ -717,6 +809,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const submitOt = useCallback<AppState["submitOt"]>(
     (o) => {
       const full: OtRequest = {
+        phoneName: profile?.phoneName,
         ...o,
         id: newId(),
         requestId: `OT-${Math.floor(Math.random() * 9000 + 1000)}`,
@@ -861,6 +954,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [repo],
   );
 
+  const deleteNotification = useCallback(
+    (id: string) => {
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+      void safeWrite("Notification delete", () => repo.deleteNotification(id));
+    },
+    [repo],
+  );
+
   // ---- context value ----
   const value = useMemo<AppState>(
     () => ({
@@ -870,7 +971,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       signInWithEmployeeId,
       signOut,
       dark,
+      themeMode,
+      setThemeMode,
       toggleDark,
+      navBlur,
+      setNavBlur,
       screen,
       navigate,
       back,
@@ -897,16 +1002,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       changeLeaveDate,
       updateProfile,
       markNotificationRead,
+      deleteNotification,
       toasts,
       toast,
       hasHydrated,
     }),
     [
-      session, signIn, signInWithEmployeeId, signOut, dark, toggleDark, screen, navigate, back, stack.length,
+      session, signIn, signInWithEmployeeId, signOut, dark, themeMode, setThemeMode, toggleDark, navBlur, setNavBlur, screen, navigate, back, stack.length,
       profile, attendance, leaves, ot, coverage, infractions, holidays, notifications,
       clockIn, clockOut, clockBusy, updateNote, submitLeave, cancelLeave, submitOt, cancelOt,
       submitTechCoverage, takeoverCoverage, cancelCoverage, changeLeaveDate, updateProfile,
-      markNotificationRead, toasts, toast, hasHydrated,
+      markNotificationRead, deleteNotification, toasts, toast, hasHydrated,
     ],
   );
 

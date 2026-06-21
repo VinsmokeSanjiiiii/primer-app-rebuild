@@ -10,17 +10,13 @@ body {
   margin: 0;
   -webkit-font-smoothing: antialiased;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  /* Match the in-app surface so the area behind the native status bar /
-     navigation bar never flashes blank black or white when the WebView
-     paints edge-to-edge. */
   background-color: #ffffff;
 }
 
 :where(.dark) body {
-  background-color: #0f172a; /* slate-900 */
+  background-color: #0f172a;
 }
 
-/* Safe-area helpers for native status / navigation bars. */
 @utility safe-top {
   padding-top: env(safe-area-inset-top);
 }
@@ -32,7 +28,6 @@ body {
   padding-right: env(safe-area-inset-right);
 }
 
-/* Consistent rounded-corner scale used across cards/inputs/buttons. */
 @theme {
   --radius-xs: 0.5rem;
   --radius-sm: 0.75rem;

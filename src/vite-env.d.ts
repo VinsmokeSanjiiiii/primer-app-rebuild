@@ -10,8 +10,11 @@ interface ImportMetaEnv {
   readonly VITE_FB_STORAGE_BUCKET?: string;
   readonly VITE_FB_MESSAGING_SENDER_ID?: string;
   readonly VITE_FB_APP_ID?: string;
+  readonly VITE_APP_VERSION?: string;
 }
 
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+declare const __APP_VERSION__: string;

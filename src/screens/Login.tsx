@@ -133,19 +133,25 @@ export function Login() {
     try {
       const verified = await verifyBiometric();
       if (!verified.ok) {
+        // Distinguish biometric/device errors from network errors so the
+        // user gets an accurate message and the right next step.
         setError(verified.error);
         toast(verified.error, "error");
         return;
       }
-      const result = await signInWithEmployeeId(verified.employeeId, true);
-      if (!result.success) {
-        setError(result.error || "Biometric unlock failed.");
-        toast(result.error || "Biometric unlock failed.", "error");
+      try {
+        const result = await signInWithEmployeeId(verified.employeeId, true);
+        if (!result.success) {
+          setError(result.error || "Sign-in failed after biometric unlock.");
+          toast(result.error || "Sign-in failed after biometric unlock.", "error");
+        }
+      } catch (e) {
+        const msg = e instanceof Error
+          ? `Network error during sign-in: ${e.message}`
+          : "Network error during sign-in.";
+        setError(msg);
+        toast(msg, "error");
       }
-    } catch (e) {
-      const msg = e instanceof Error ? `Network error: ${e.message}` : "Network error during biometric unlock.";
-      setError(msg);
-      toast(msg, "error");
     } finally {
       setBiometric(false);
     }
@@ -347,19 +353,31 @@ export function Login() {
         </Button>
 
         {bioSupported && bioEnrolled && (
-          <button
-            type="button"
-            onClick={handleBiometricUnlock}
-            disabled={biometric}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60 dark:border-white/15 dark:text-slate-200 dark:hover:bg-white/5"
-          >
-            <Icon name="fingerprint" size={18} />
-            {biometric ? "Authenticating…" : bioEmail ? `Unlock as ${bioEmail}` : "Unlock with biometrics"}
-          </button>
+          <div className="space-y-1.5">
+            <button
+              type="button"
+              onClick={handleBiometricUnlock}
+              disabled={biometric}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60 dark:border-white/15 dark:text-slate-200 dark:hover:bg-white/5"
+            >
+              <Icon name="fingerprint" size={18} />
+              {biometric ? "Authenticating…" : bioEmail ? `Unlock as ${bioEmail}` : "Unlock with biometrics"}
+            </button>
+            <p className="text-center text-[11px] text-slate-400">
+              {biometric
+                ? "Confirm with your fingerprint or face."
+                : "Use Face ID / fingerprint / Windows Hello on this device. Password sign-in below still works if biometrics fail."}
+            </p>
+          </div>
         )}
         {bioSupported && !bioEnrolled && (
           <p className="text-center text-xs text-slate-400">
             Sign in once to enable biometric unlock on this device.
+          </p>
+        )}
+        {!bioSupported && (
+          <p className="text-center text-[11px] text-slate-400">
+            Biometric unlock isn't available on this device — use password sign-in above.
           </p>
         )}
       </div>

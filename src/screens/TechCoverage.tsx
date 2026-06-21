@@ -7,7 +7,7 @@ import { Calendar } from "../components/Calendar";
 import { startOfDay, serverNow, parseDate, monthName } from "../lib/date";
 
 // Maintenance mode - Tech Issue requests are currently disabled
-const MAINTENANCE_MODE = true;
+const MAINTENANCE_MODE = false;
 
 export function TechCoverage() {
   const { profile, submitTechCoverage, back, toast } = useApp();

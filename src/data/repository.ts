@@ -100,6 +100,7 @@ export interface Repository {
   // Notifications
   getNotifications(employeeId: string): Promise<AppNotification[]>;
   updateNotification(id: string, patch: Partial<AppNotification>): Promise<void>;
+  deleteNotification(id: string): Promise<void>;
 
   // Server time helper (legacy behavior)
   getServerTimeOffsetMs(): Promise<number>;
@@ -207,6 +208,9 @@ class LocalOfflineRepository implements Repository {
     return seedNotifications;
   }
   async updateNotification(_id: string, _patch: Partial<AppNotification>) {
+    /* read-only offline */
+  }
+  async deleteNotification(_id: string) {
     /* read-only offline */
   }
 
@@ -771,6 +775,12 @@ export class FirebaseRepository implements Repository {
     await update(ref(this.db, `Notifications/${employeeId}/${id}`), fb);
   }
 
+  async deleteNotification(id: string) {
+    const employeeId = (await this.getSession())?.employeeId;
+    if (!employeeId) return;
+    await remove(ref(this.db, `Notifications/${employeeId}/${id}`));
+  }
+
   // -------------------------------------------------------------------------
   // Server time offset
   //
@@ -886,6 +896,13 @@ function mapAttendanceToFb(r: AttendanceRecord): Record<string, unknown> {
   const m: Record<string, unknown> = {
     AttendanceID: r.attendanceCode,
     Employee_ID_Number: r.employeeId,
+    Phone_Name: r.phoneName ?? "",
+    Team: r.team ?? "",
+    workSetup: r.workSetup ?? "",
+    ABonus: r.aBonus ?? 0,
+    RHoliday: r.rHoliday ?? 0,
+    SHoliday: r.sHoliday ?? 0,
+    Infraction: r.infraction ?? 0,
     isClockedIn: r.isClockedIn,
     Status: r.status,
     Note: r.note ?? "",
@@ -895,7 +912,7 @@ function mapAttendanceToFb(r: AttendanceRecord): Record<string, unknown> {
     recordType: r.recordType,
     note_locked: r.noteLocked ?? false,
     month: r.month,
-    year: r.year,
+    year: String(r.year ?? new Date().getFullYear()),
   };
   if (r.clockInTs !== undefined) m.clock_in_ts = r.clockInTs;
   if (r.clockOutTs !== undefined) m.clock_out_ts = r.clockOutTs;
@@ -946,23 +963,30 @@ function mapLeave(id: string, rec: FbLeaveRecord): LeaveRequest | null {
 }
 
 function mapLeaveToFb(r: LeaveRequest): Record<string, unknown> {
-  return {
+  // Firebase RTDB throws on any undefined field value. Conditionally include
+  // optional fields; convert year/days to strings to match DB schema.
+  const m: Record<string, unknown> = {
     requestId: r.requestId,
     leaveType: r.leaveType,
     status: r.status,
     timestamp: serverTimestamp(),
-    leaveDate: r.leaveDate[0] ?? "", // legacy: single date per record
-    reason: r.reason,
-    proofUrl: r.proofUrl,
+    convertedTimestamp: new Date().toLocaleString("en-US"),
+    leaveDate: r.leaveDate[0] ?? "",
+    reason: r.reason ?? "",
     Full_Name: r.fullName,
-    days: r.days,
+    Phone_Name: r.phoneName ?? "",
+    days: String(r.days),
     position: r.position,
-    year: r.year,
+    year: String(r.year),
     month: r.month,
     Employee_ID_Number: r.employeeId,
     Days_Off: r.daysOff,
     Schedule: r.schedule,
+    Coverage_Status: r.coverageStatus ?? "None",
+    Cancellation_Reason: r.cancellationReason ?? "",
   };
+  if (r.proofUrl !== undefined) m.proofUrl = r.proofUrl;
+  return m;
 }
 
 function mapLeavePatchToFb(p: Partial<LeaveRequest>): Record<string, unknown> {
@@ -1003,13 +1027,17 @@ function mapOtToFb(o: OtRequest): Record<string, unknown> {
     OT_Date: o.otDate,
     OT_Status: o.status,
     OT_Time: o.otTime,
+    reason: o.reason,
+    otShift: o.otShift ?? "",
+    typeCode: o.typeCode,
     Employee_ID_Number: o.employeeId,
-    Phone_Name: undefined,
+    Phone_Name: o.phoneName ?? "",
+    Full_Name: o.fullName,
     Position: o.position,
     Team: o.team,
     Schedule: o.schedule,
     month: o.month,
-    year: o.year,
+    year: String(o.year ?? new Date().getFullYear()),
   };
 }
 
@@ -1064,7 +1092,7 @@ function mapCoverageToFb(c: CoverageRequest): Record<string, unknown> {
     Position: c.position,
     Employee_ID_Number: c.requesterId,
     CoveredHours: c.coveredHours,
-    Phone_Name: undefined,
+    Phone_Name: c.phoneName ?? "",
     Schedule: c.schedule,
     Team: c.team,
     requesterId: c.requesterId,

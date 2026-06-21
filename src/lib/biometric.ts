@@ -206,3 +206,64 @@ export function clearEnrolledBiometric(): void {
 
 // Silence unused-prefix warning if tree-shaking strips the constant.
 void CHALLENGE_PREFIX;
+
+// ---------------------------------------------------------------------------
+// Status helpers (UX-facing)
+// ---------------------------------------------------------------------------
+
+export type BiometricStatusKind =
+  | "unsupported"            // No WebAuthn at all (very old browser / non-secure context)
+  | "unsupported-browser"    // WebAuthn exists but platform authenticator not available
+  | "not-enrolled"           // Available but no credential stored locally
+  | "enrolled"               // Stored credential, ready to verify
+  | "ready"                  // Same as enrolled — kept for finer state machines
+  | "locked"                 // Verification rejected too many times
+  | "canceled"               // Last verification was cancelled by the user
+  | "failed"                 // Last verification failed for another reason
+  | "rebind-required";       // Stored credential references a different device/binding
+
+export interface BiometricStatus {
+  kind: BiometricStatusKind;
+  message: string;
+  enrolledEmail?: string;
+}
+
+/** Snapshot of the current biometric capability + enrollment state. */
+export async function getBiometricStatus(): Promise<BiometricStatus> {
+  if (!isWebAuthnSupported()) {
+    return {
+      kind: "unsupported",
+      message: "Biometric unlock is not available on this device.",
+    };
+  }
+  const available = await isBiometricAvailable();
+  if (!available) {
+    return {
+      kind: "unsupported-browser",
+      message:
+        "This browser can't use the device's fingerprint or face unlock. Try the system browser.",
+    };
+  }
+  const enrolledEmail = getEnrolledEmployeeEmail() ?? undefined;
+  if (!enrolledEmail) {
+    return {
+      kind: "not-enrolled",
+      message: "Sign in once to enable biometric unlock on this device.",
+    };
+  }
+  return {
+    kind: "enrolled",
+    message: `Ready to unlock as ${enrolledEmail}.`,
+    enrolledEmail,
+  };
+}
+
+/** Maps a verification error message to a status kind for UX routing. */
+export function classifyBiometricError(message: string): BiometricStatusKind {
+  const m = message.toLowerCase();
+  if (/cancel|aborted|notallowed/.test(m)) return "canceled";
+  if (/lock|too many|timeout/.test(m)) return "locked";
+  if (/not.*enrolled|no.*credential/.test(m)) return "not-enrolled";
+  if (/rebind|device/.test(m)) return "rebind-required";
+  return "failed";
+}

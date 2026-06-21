@@ -20,7 +20,6 @@ export function Dashboard() {
   const unread = notifications.filter((n) => !n.readAt).length;
   const userInfractions = infractions.filter((i) => i.employeeId === profile.employeeId);
 
-  // Badge shows only *unseen* infractions — Infractions screen writes seen IDs to localStorage
   const unseenInfractionCount = (() => {
     const seen = loadSeenIds();
     return userInfractions.filter((i) => !seen.has(i.id)).length;
@@ -49,7 +48,6 @@ export function Dashboard() {
 
   return (
     <div className="space-y-4 px-4 pb-6 pt-4">
-      {/* Greeting header - email removed as it appears elsewhere in profile */}
       <div className="flex items-center gap-3">
         <Avatar url={profile.profileImageUrl} name={profile.fullName} size={52} />
         <div className="min-w-0 flex-1">
@@ -74,7 +72,6 @@ export function Dashboard() {
         </button>
       </div>
 
-      {/* Clock status card */}
       <Card
         className="bg-gradient-to-br from-indigo-600 to-violet-600 text-white"
         onClick={() => navigate("clock")}
@@ -103,23 +100,26 @@ export function Dashboard() {
         </div>
       </Card>
 
-      {/* Credits row */}
       <div className="grid grid-cols-3 gap-2">
         <CreditChip label="Vacation" value={profile.vlCredits} tone="indigo" />
         <CreditChip label="Sick" value={profile.slCredits} tone="sky" />
         <CreditChip label="Birthday" value={profile.blCredit} tone="amber" />
       </div>
 
-      {/* Quick actions */}
       <SectionTitle>Quick actions</SectionTitle>
       <div className="grid grid-cols-4 gap-2">
         <QuickAction icon="plus" label="Request" onClick={() => setReqOpen(true)} />
         <QuickAction icon="clock" label="Clock" onClick={() => navigate("clock")} />
-        <QuickAction icon="swap" label="Coverage" onClick={() => navigate("coverage")} />
+        <QuickAction
+          icon="swap"
+          label="Coverage"
+          onClick={() => navigate("coverage")}
+          disabled={!profile.isFlextime}
+          disabledReason="Flextime only"
+        />
         <QuickAction icon="alert" label="Infractions" onClick={() => navigate("infractions")} badge={unseenInfractionCount} />
       </div>
 
-      {/* Profile summary */}
       <SectionTitle action={<button onClick={() => navigate("profile")} className="text-xs font-bold text-indigo-600 dark:text-indigo-400">View all</button>}>
         Profile summary
       </SectionTitle>
@@ -139,7 +139,6 @@ export function Dashboard() {
         </div>
       </Card>
 
-      {/* Merged request timeline */}
       <SectionTitle action={<button onClick={() => navigate("requests")} className="text-xs font-bold text-indigo-600 dark:text-indigo-400">All requests</button>}>
         Pending & active requests
       </SectionTitle>
@@ -166,7 +165,6 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* Request type chooser with maintenance mode for OT and Tech Issue */}
       <Dialog
         open={reqOpen}
         onClose={() => setReqOpen(false)}
@@ -215,16 +213,35 @@ function CreditChip({ label, value, tone }: { label: string; value: number; tone
   );
 }
 
-function QuickAction({ icon, label, onClick, badge }: { icon: IconName; label: string; onClick: () => void; badge?: number }) {
+function QuickAction({
+  icon, label, onClick, badge, disabled, disabledReason,
+}: {
+  icon: IconName;
+  label: string;
+  onClick: () => void;
+  badge?: number;
+  disabled?: boolean;
+  disabledReason?: string;
+}) {
   return (
     <button
-      onClick={onClick}
-      className="relative flex flex-col items-center gap-1.5 rounded-2xl border border-slate-200/70 bg-white p-3 text-slate-700 transition active:scale-95 dark:border-white/10 dark:bg-slate-800/60 dark:text-slate-200"
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      title={disabled ? disabledReason : undefined}
+      className={`relative flex flex-col items-center gap-1.5 rounded-2xl border p-3 transition ${
+        disabled
+          ? "cursor-not-allowed border-slate-200/50 bg-slate-50 opacity-50 dark:border-white/5 dark:bg-slate-800/30"
+          : "border-slate-200/70 bg-white text-slate-700 active:scale-95 dark:border-white/10 dark:bg-slate-800/60 dark:text-slate-200"
+      }`}
     >
-      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300">
+      <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${
+        disabled
+          ? "bg-slate-100 text-slate-400 dark:bg-slate-700 dark:text-slate-500"
+          : "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300"
+      }`}>
         <Icon name={icon} size={18} />
       </div>
-      <span className="text-[11px] font-semibold">{label}</span>
+      <span className={`text-[11px] font-semibold ${disabled ? "text-slate-400 dark:text-slate-500" : ""}`}>{label}</span>
       {badge ? (
         <span className="absolute right-1.5 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
           {badge}
