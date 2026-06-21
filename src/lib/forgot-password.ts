@@ -28,10 +28,7 @@ export interface ResetResult {
   devOtp?: string; // Only in development
 }
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const OTP_FUNCTION_URL = SUPABASE_URL
-  ? `${SUPABASE_URL}/functions/v1/password-reset-otp`
-  : "https://primerhr-portal-zqtv7jq6.supabase.co/functions/v1/password-reset-otp";
+const OTP_FUNCTION_URL = "/api/password-reset-otp";
 
 /**
  * Verify the email exists in the legacy /Users node before sending OTP.
