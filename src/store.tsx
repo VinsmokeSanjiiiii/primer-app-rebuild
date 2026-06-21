@@ -308,9 +308,60 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const reconciled = await reconcileActiveSession(repo, empId, a);
       setAttendance(reconciled.attendance);
 
+      // Auto-create CoverageList entries for any approved leave that doesn't
+      // already have a matching coverage record. This handles leaves approved
+      // externally by an admin while the employee was offline.
+      let coverageList = c;
+      if (p) {
+        const newCovs: CoverageRequest[] = [];
+        for (const leave of l) {
+          if (leave.status !== "Approved") continue;
+          for (const leaveDate of leave.leaveDate) {
+            const alreadyExists = coverageList.some(
+              (cv) =>
+                cv.requesterId === empId &&
+                cv.coverageType === "Leave" &&
+                cv.coverageDate === leaveDate,
+            );
+            if (!alreadyExists) {
+              const cov: CoverageRequest = {
+                id: newId(),
+                coverageId: `CV-${Math.floor(Math.random() * 9000 + 1000)}`,
+                employeeId: empId,
+                requesterId: empId,
+                requesterName: p.fullName,
+                phoneName: p.phoneName,
+                coverageDate: leaveDate,
+                coverageTime: p.schedule,
+                coverageType: "Leave",
+                coverageStatus: "Available",
+                forCoverageHours: 8,
+                daysOff: p.daysOff,
+                position: p.position,
+                schedule: p.schedule,
+                month: leave.month,
+                year: leave.year,
+                team: p.team,
+                reason: `Coverage for ${leave.leaveType} on ${leaveDate}`,
+                createdAt: Date.now(),
+              };
+              newCovs.push(cov);
+              void safeWrite(
+                "Coverage for approved leave",
+                () => repo.createCoverage(cov),
+                { retries: 2 },
+              );
+            }
+          }
+        }
+        if (newCovs.length > 0) {
+          coverageList = [...coverageList, ...newCovs];
+        }
+      }
+
       setLeaves(l);
       setOt(o);
-      setCoverage(c);
+      setCoverage(coverageList);
       setInfractions(i);
       setHolidays(h);
       setNotifications(notifs);

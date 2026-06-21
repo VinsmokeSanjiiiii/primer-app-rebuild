@@ -20,8 +20,8 @@ export function Requests() {
   const { leaves, ot, cancelLeave, cancelOt, navigate } = useApp();
   const [tab, setTab] = useState<"leave" | "ot">("leave");
   const [search, setSearch] = useState("");
-  const [filterMonth, setFilterMonth] = useState(() => currentServerMonth());
-  const [filterYear, setFilterYear] = useState(() => String(currentServerYear()));
+  const [filterMonth, setFilterMonth] = useState("All");
+  const [filterYear, setFilterYear] = useState("All");
   const [cancelTarget, setCancelTarget] = useState<{ kind: "leave" | "ot"; id: string } | null>(null);
   const [reason, setReason] = useState("");
 

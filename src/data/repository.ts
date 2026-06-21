@@ -251,6 +251,24 @@ function asBoolean(v: unknown, fallback = false): boolean {
 }
 
 /**
+ * Parse a date string in "M/D/YYYY" or "YYYY-MM-DD" format to a Unix timestamp.
+ * Returns 0 for unparseable strings (safe for sort comparisons).
+ */
+function parseDateStr(s: string): number {
+  if (!s) return 0;
+  // ISO format: YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return new Date(s + "T00:00:00").getTime();
+  // Legacy: M/D/YYYY or M/D/YYYY HH:mm:ss
+  const parts = s.split(/[\s/]/);
+  if (parts.length >= 3) {
+    const [m, d, y] = parts;
+    const ts = new Date(`${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}T00:00:00`).getTime();
+    if (!isNaN(ts)) return ts;
+  }
+  return 0;
+}
+
+/**
  * Profile record as it is stored under /Users/{Employee_ID_Number}.
  * Keys match the exact Firebase field names from the primerdb2 export.
  */
@@ -555,16 +573,21 @@ export class FirebaseRepository implements Repository {
   // -------------------------------------------------------------------------
 
   async getAttendance(employeeId: string) {
-    const q = query(
-      ref(this.db, "Attendance"),
-      orderByChild("Employee_ID_Number"),
-      equalTo(employeeId),
-    );
-    const snap = await get(q);
+    // Fetch all records and filter client-side — avoids requiring a Firebase
+    // index on Employee_ID_Number, which causes silent failures when absent.
+    const snap = await get(ref(this.db, "Attendance"));
     const raw = toObject<Record<string, FbAttendanceRecord>>(snap) ?? {};
     return Object.entries(raw)
       .map(([id, rec]) => mapAttendance(id, rec))
-      .sort((a, b) => (b.clockOutTs ?? 0) - (a.clockOutTs ?? 0));
+      .filter((r) => r.employeeId === employeeId)
+      .sort((a, b) => {
+        // Primary: by dateIn descending (most-recent first)
+        const dateA = parseDateStr(a.dateIn);
+        const dateB = parseDateStr(b.dateIn);
+        if (dateB !== dateA) return dateB - dateA;
+        // Secondary: by clockInTs to break same-day ties
+        return (b.clockInTs ?? 0) - (a.clockInTs ?? 0);
+      });
   }
 
   async createAttendance(record: AttendanceRecord) {
@@ -597,15 +620,14 @@ export class FirebaseRepository implements Repository {
   }
 
   async getLeaves(employeeId: string) {
-    const q = query(
-      ref(this.db, "LeaveRequests"),
-      orderByChild("Employee_ID_Number"),
-      equalTo(employeeId),
-    );
-    const snap = await get(q);
+    // Fetch all records and filter client-side — avoids requiring a Firebase
+    // index on Employee_ID_Number, which causes silent failures when absent.
+    const snap = await get(ref(this.db, "LeaveRequests"));
     const raw = toObject<Record<string, FbLeaveRecord>>(snap) ?? {};
     const grouped = new Map<string, LeaveRequest>();
     for (const [key, rec] of Object.entries(raw)) {
+      // Filter to this employee only
+      if (asString(rec.Employee_ID_Number) !== employeeId) continue;
       const item = mapLeave(key, rec);
       if (!item) continue;
       const rid = item.requestId;
@@ -940,7 +962,12 @@ function mapAttendancePatchToFb(r: Partial<AttendanceRecord>): Record<string, un
 
 function mapLeave(id: string, rec: FbLeaveRecord): LeaveRequest | null {
   if (!rec) return null;
-  const requestId = asString(rec.requestId) || id.split("_")[0] || id;
+  // Treat "0", empty string, and missing requestId as invalid — use the
+  // Firebase key so each legacy record gets its own unique identity.
+  const rawRequestId = asString(rec.requestId);
+  const requestId = (rawRequestId && rawRequestId !== "0")
+    ? rawRequestId
+    : id.split("_")[0] || id;
   return {
     id: requestId,
     requestId,

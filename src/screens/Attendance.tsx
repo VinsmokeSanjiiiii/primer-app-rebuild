@@ -10,7 +10,7 @@ export function Attendance() {
   const { attendance, updateNote } = useApp();
   const today = new Date();
   const ago = new Date();
-  ago.setDate(ago.getDate() - 30);
+  ago.setDate(ago.getDate() - 90);
   const [from, setFrom] = useState(toInput(ago));
   const [to, setTo] = useState(toInput(today));
   const [editing, setEditing] = useState<AttendanceRecord | null>(null);
