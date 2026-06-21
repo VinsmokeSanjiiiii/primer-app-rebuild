@@ -23,6 +23,19 @@ export interface SafeWriteOptions {
 
 export function classifyError(err: unknown): ErrorKind {
   if (typeof navigator !== "undefined" && !navigator.onLine) return "network";
+  // Firebase RTDB errors are non-standard objects with a non-enumerable `code`
+  // field. Extract it explicitly before falling back to string serialization.
+  if (err && typeof err === "object") {
+    const fbErr = err as { code?: string; message?: string };
+    const code = (fbErr.code ?? "").toLowerCase();
+    const fbMsg = (fbErr.message ?? "").toLowerCase();
+    if (/permission|denied|unauthor/.test(code) || /permission|denied|unauthor/.test(fbMsg))
+      return "permission";
+    if (/network|timeout|unavailable/.test(code) || /network|timeout|unavailable/.test(fbMsg))
+      return "network";
+    if (/invalid|validation|missing/.test(code) || /invalid|validation|missing/.test(fbMsg))
+      return "validation";
+  }
   const msg = err instanceof Error ? err.message : String(err ?? "");
   const lc = msg.toLowerCase();
   if (/network|fetch|timeout|offline|unavailable/.test(lc)) return "network";

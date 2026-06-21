@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "../components/Icon";
+import { APP_VERSION } from "../lib/appVersion";
 
 const SESSION_KEY = "primer_portal_session";
 
@@ -76,6 +77,9 @@ export function Splash({ onDone }: { onDone: () => void }) {
     }, 2500);
 
     return () => {
+      // Reset guards so React 18 StrictMode's second mount can re-run.
+      startedRef.current = false;
+      finishedRef.current = false;
       window.clearInterval(interval);
       window.clearTimeout(cap);
     };
@@ -83,7 +87,7 @@ export function Splash({ onDone }: { onDone: () => void }) {
   }, []);
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-8 bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 px-10 text-white">
+    <div className="relative flex h-full flex-col items-center justify-center gap-8 bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 px-10 text-white">
       <div className="flex flex-col items-center gap-4">
         <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-white/15 shadow-xl ring-1 ring-white/30 backdrop-blur">
           <Icon name="shield" size={42} />
@@ -106,6 +110,7 @@ export function Splash({ onDone }: { onDone: () => void }) {
           {status}
         </div>
       </div>
+      <p className="absolute bottom-3 text-[10px] text-white/30 tracking-wider">v{APP_VERSION}</p>
     </div>
   );
 }

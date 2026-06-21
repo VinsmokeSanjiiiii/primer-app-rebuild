@@ -181,6 +181,7 @@ interface AppState {
   changeLeaveDate: (kind: "leave" | "ot", id: string, newDate: string) => void;
   updateProfile: (patch: Partial<Profile>) => void;
   markNotificationRead: (id: string) => void;
+  deleteNotification: (id: string) => void;
 
   // toasts
   toasts: Toast[];
@@ -528,11 +529,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         note: "",
         noteLocked: false,
         minsLate: 0,
+        phoneName: profile.phoneName,
+        team: profile.team,
+        workSetup: profile.workSetup,
         recordType: profile.isFlextime ? "Flextime" : "Regular",
         status: "Open",
         isClockedIn: true,
         month: monthName(now),
         year: phtYear(now),
+        aBonus: 0,
+        rHoliday: 0,
+        sHoliday: 0,
+        infraction: 0,
       };
 
       // Persist the durable backup BEFORE touching React state or Firebase.
@@ -674,7 +682,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const submitLeave = useCallback<AppState["submitLeave"]>(
     (lr) => {
       // Vacation Leave: auto-approve, allow negative credits capped at -12
-      // Sick Leave: always pending (no auto-approve)
+      // Sick Leave / Bereavement / Birthday: always pending
       const autoApprove = lr.leaveType === "Vacation Leave";
       const status = autoApprove ? "Approved" : "Pending";
 
@@ -685,29 +693,70 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
         status,
       };
-      setLeaves((prev) => [full, ...prev]);
-      void safeWrite("Leave request", () => repo.createLeave(full), { critical: true, retries: 2, toast });
 
-      // Credit handling
-      setProfile((p) => {
-        if (!p) return p;
-        let next = { ...p };
-        if (lr.leaveType === "Vacation Leave") {
-          // Allow negative credits, cap at -12
-          const newCredits = p.vlCredits - lr.days;
-          next = { ...p, vlCredits: Math.max(-12, newCredits) };
-        } else if (lr.leaveType === "Sick Leave") {
-          // Sick leave can be used even at 0 credits
-          next = { ...p, slCredits: Math.max(0, p.slCredits - lr.days) };
-        } else if (lr.leaveType === "Birthday Leave") {
-          next = { ...p, blCredit: Math.max(0, p.blCredit - 1) };
+      // Optimistic: add to local list first so the UI reflects the request
+      setLeaves((prev) => [full, ...prev]);
+
+      void (async () => {
+        // Await the write — do NOT deduct credits until we know it landed
+        const result = await safeWrite("Leave request", () => repo.createLeave(full), { critical: true, retries: 2, toast });
+
+        if (!result.ok) {
+          // Write failed — roll back the optimistic leave entry
+          setLeaves((prev) => prev.filter((l) => l.id !== full.id));
+          return;
         }
-        persistProfile(next);
-        return next;
-      });
-      toast(`${lr.leaveType} request ${autoApprove ? "approved" : "submitted"}.`, "success");
+
+        // Write succeeded — now deduct credits and persist the profile
+        setProfile((p) => {
+          if (!p) return p;
+          let next = { ...p };
+          if (lr.leaveType === "Vacation Leave") {
+            const newCredits = p.vlCredits - lr.days;
+            next = { ...p, vlCredits: Math.max(-12, newCredits) };
+          } else if (lr.leaveType === "Sick Leave") {
+            next = { ...p, slCredits: Math.max(0, p.slCredits - lr.days) };
+          } else if (lr.leaveType === "Birthday Leave") {
+            next = { ...p, blCredit: Math.max(0, p.blCredit - 1) };
+          }
+          persistProfile(next);
+          return next;
+        });
+
+        // Auto-approved VL → create a coverage slot so a teammate can fill in
+        if (autoApprove && profile) {
+          for (const d of full.leaveDate) {
+            const covId = `CV-${Math.floor(Math.random() * 9000 + 1000)}`;
+            const cov: CoverageRequest = {
+              id: newId(),
+              coverageId: covId,
+              employeeId: profile.employeeId,
+              requesterId: profile.employeeId,
+              requesterName: profile.fullName,
+              phoneName: profile.phoneName,
+              coverageDate: d,
+              coverageTime: profile.schedule,
+              coverageType: "Leave",
+              coverageStatus: "Available",
+              forCoverageHours: 8,
+              daysOff: profile.daysOff,
+              position: profile.position,
+              schedule: profile.schedule,
+              month: lr.month,
+              year: lr.year,
+              team: profile.team,
+              reason: `Coverage for ${lr.leaveType} on ${d}`,
+              createdAt: Date.now(),
+            };
+            setCoverage((prev) => [cov, ...prev]);
+            void safeWrite("Coverage for leave", () => repo.createCoverage(cov), { retries: 2 });
+          }
+        }
+
+        toast(`${lr.leaveType} request ${autoApprove ? "approved" : "submitted"}.`, "success");
+      })();
     },
-    [toast, repo, persistProfile],
+    [toast, repo, persistProfile, profile],
   );
 
   const cancelLeave = useCallback(
@@ -760,6 +809,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const submitOt = useCallback<AppState["submitOt"]>(
     (o) => {
       const full: OtRequest = {
+        phoneName: profile?.phoneName,
         ...o,
         id: newId(),
         requestId: `OT-${Math.floor(Math.random() * 9000 + 1000)}`,
@@ -904,6 +954,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [repo],
   );
 
+  const deleteNotification = useCallback(
+    (id: string) => {
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+      void safeWrite("Notification delete", () => repo.deleteNotification(id));
+    },
+    [repo],
+  );
+
   // ---- context value ----
   const value = useMemo<AppState>(
     () => ({
@@ -944,6 +1002,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       changeLeaveDate,
       updateProfile,
       markNotificationRead,
+      deleteNotification,
       toasts,
       toast,
       hasHydrated,
@@ -953,7 +1012,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       profile, attendance, leaves, ot, coverage, infractions, holidays, notifications,
       clockIn, clockOut, clockBusy, updateNote, submitLeave, cancelLeave, submitOt, cancelOt,
       submitTechCoverage, takeoverCoverage, cancelCoverage, changeLeaveDate, updateProfile,
-      markNotificationRead, toasts, toast, hasHydrated,
+      markNotificationRead, deleteNotification, toasts, toast, hasHydrated,
     ],
   );
 

@@ -57,6 +57,9 @@ export function LeaveRequest() {
       if (d.getMonth() !== birthday.getMonth() || d.getDate() !== birthday.getDate())
         return "Birthday leave must be on your birthday";
       if (daysBetween(today, birthday) < 15) return "Within 15 days of birthday";
+    } else {
+      // All other leave types require at least 15 calendar days advance notice
+      if (daysBetween(today, d) < 15) return "Must be filed 15 days in advance";
     }
     return null;
   };
@@ -120,6 +123,7 @@ export function LeaveRequest() {
     const sorted = [...dates].sort((a, b) => parseDate(a).getTime() - parseDate(b).getTime());
     submitLeave({
       employeeId: profile.employeeId,
+      phoneName: profile.phoneName,
       leaveType: type,
       leaveDate: sorted,
       status: "Pending",

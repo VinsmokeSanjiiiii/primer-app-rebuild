@@ -5,7 +5,7 @@ type IconName =
   | "shield" | "wifi" | "eye" | "eye-off" | "check" | "x" | "plus" | "edit"
   | "lock" | "logout" | "sun" | "moon" | "chevron" | "filter" | "swap"
   | "umbrella" | "bolt" | "wrench" | "alert" | "camera" | "search" | "download"
-  | "info" | "refresh" | "fingerprint" | "id" | "wifi-off";
+  | "info" | "refresh" | "fingerprint" | "id" | "wifi-off" | "trash";
 
 const paths: Record<IconName, string> = {
   home: "M3 11.5 12 4l9 7.5M5 10v10h14V10",
@@ -42,6 +42,7 @@ const paths: Record<IconName, string> = {
   refresh: "M21 12a9 9 0 1 1-3-6.7L21 7M21 3v4h-4",
   fingerprint: "M12 11a3 3 0 0 1 3 3v3M9 14a3 3 0 0 1 6 0M6 12a6 6 0 0 1 12 0v4M12 17v2",
   id: "M3 5h18v14H3zM7 9h4M7 13h6M16 9a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z",
+  trash: "M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6",
 };
 
 export function Icon({

@@ -19,12 +19,14 @@ export function Attendance() {
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
-    const f = new Date(from);
-    const t = new Date(to);
-    t.setHours(23, 59, 59);
+    // Parse as local midnight (adding T00:00:00 prevents UTC-midnight parsing)
+    const f = new Date(from + "T00:00:00");
+    const t = new Date(to + "T23:59:59");
     return attendance
       .filter((r) => {
+        if (!r.dateIn) return false;
         const d = parseDate(r.dateIn);
+        if (isNaN(d.getTime()) || d.getTime() === 0) return false;
         return d >= f && d <= t;
       })
       .sort((a, b) => {

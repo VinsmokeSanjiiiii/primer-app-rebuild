@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build:apk": "pnpm build && pnpm exec cap sync android && cmd /c \"set JAVA_HOME=C:\\Program Files\\Android\\Android Studio\\jbr&& cd android && .\\gradlew assembleDebug\"",
+    "build:apk": "pnpm build && pnpm exec cap sync android && cmd /c \"set JAVA_HOME=C:\\Program Files\\Android\\Android Studio\\jbr&& set ANDROID_HOME=%LOCALAPPDATA%\\Android\\Sdk&& cd android && .\\gradlew assembleDebug\"",
     "zip": "git archive -o project.zip HEAD"
   },
 

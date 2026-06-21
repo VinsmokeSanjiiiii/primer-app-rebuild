@@ -8,7 +8,7 @@ import { startOfDay, serverNow, parseDate, monthName } from "../lib/date";
 import type { OtType, OtShift, OtTypeCode } from "../types";
 
 // Maintenance mode - OT requests are currently disabled
-const MAINTENANCE_MODE = true;
+const MAINTENANCE_MODE = false;
 
 export function OTRequest() {
   const { profile, submitOt, back, toast } = useApp();

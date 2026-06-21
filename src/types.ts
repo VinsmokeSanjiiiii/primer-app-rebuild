@@ -40,12 +40,12 @@ export interface Profile {
   schedule: string;
   daysOff: string;
   status: string;
-  dateStarted: string; // ISO date
+  dateStarted: string;
   tenure: string;
   address: string;
   contactNumber: string;
   personalEmail: string;
-  birthDate: string; // ISO date
+  birthDate: string;
   department: string;
   phoneName: string;
   vlCredits: number;
@@ -68,8 +68,14 @@ export interface AttendanceRecord {
   id: string;
   attendanceCode: string;
   employeeId: string;
-  dateIn: string; // M/d/yyyy (Asia/Manila)
-  timeIn: string; // HH:mm  (Asia/Manila)
+  /** Device/phone name from the employee profile — written to DB on clock-in */
+  phoneName?: string;
+  /** Employee team — written to DB on clock-in */
+  team?: string;
+  /** Work setup ("WFH" | "On-site") — written to DB on clock-in */
+  workSetup?: string;
+  dateIn: string;
+  timeIn: string;
   dateOut?: string;
   timeOut?: string;
   totalHours?: number;
@@ -85,14 +91,21 @@ export interface AttendanceRecord {
   isClockedIn: boolean;
   month: string;
   year: number;
+  /** Leave/holiday bonus flags (written to DB on clock-in, default 0) */
+  aBonus?: number;
+  rHoliday?: number;
+  sHoliday?: number;
+  infraction?: number;
 }
 
 export interface LeaveRequest {
   id: string;
   requestId: string;
   employeeId: string;
+  /** Device/phone name — denormalised on write */
+  phoneName?: string;
   leaveType: LeaveType;
-  leaveDate: string[]; // M/d/yyyy values
+  leaveDate: string[];
   status: LeaveStatus;
   reason: string;
   proofUrl?: string;
@@ -103,6 +116,8 @@ export interface LeaveRequest {
   month: string;
   daysOff: string;
   schedule: string;
+  /** "None" by default; updated when coverage is arranged */
+  coverageStatus?: string;
   cancellationReason?: string;
   createdAt: number;
 }
@@ -114,11 +129,12 @@ export interface OtRequest {
   otType: OtType;
   otShift?: OtShift;
   typeCode: OtTypeCode;
-  otDate: string; // M/d/yyyy
+  otDate: string;
   otTime: string;
   durationHours: number;
   status: LeaveStatus;
   reason: string;
+  phoneName?: string;
   fullName: string;
   position: string;
   team: string;
@@ -132,12 +148,14 @@ export interface OtRequest {
 export interface CoverageRequest {
   id: string;
   coverageId: string;
-  employeeId: string; // owner of the coverage record
+  employeeId: string;
   requesterId: string;
   requesterName: string;
-  coverageDate: string; // M/d/yyyy
+  /** Device/phone name of the requester */
+  phoneName?: string;
+  coverageDate: string;
   coverageTime: string;
-  coverageType: string; // "Tech Issue" | "Leave" | OtTypeCode ...
+  coverageType: string;
   coverageStatus: CoverageStatus;
   forCoverageHours: number;
   coveredHours?: number;
@@ -160,7 +178,7 @@ export interface Infraction {
   infractionType: string;
   lostMinutes: number;
   notes: string;
-  infractionDate: string; // M/d/yyyy
+  infractionDate: string;
   daysOff?: string;
   phoneName?: string;
   schedule?: string;
@@ -171,9 +189,9 @@ export interface Infraction {
 
 export interface Holiday {
   id: string;
-  hdate: string; // M/d/yyyy
+  hdate: string;
   name: string;
-  htype?: string; // HType from DB: "Regular", "Special", etc.
+  htype?: string;
 }
 
 export interface AppNotification {

@@ -4,14 +4,20 @@ import { AppBar } from "../components/AppBar";
 import { Card, Button, Badge, Avatar, Field, SectionTitle, Dialog, TextField, TextArea } from "../components/ui";
 import { Icon, type IconName } from "../components/Icon";
 import { tenureFrom } from "../lib/date";
+import { APP_VERSION } from "../lib/appVersion";
+import { bootController, useBootState } from "../lib/bootState";
+import { downloadAndInstallApk } from "../lib/updateCheck";
+import { Capacitor } from "@capacitor/core";
 
 export function Profile() {
-  const { profile, updateProfile, signOut, navigate, toggleDark, dark, toast, themeMode, setThemeMode, navBlur, setNavBlur } = useApp();
+  const { profile, updateProfile, signOut, navigate, toggleDark, dark, toast, themeMode, setThemeMode } = useApp();
   const fileRef = useRef<HTMLInputElement>(null);
   const [pwOpen, setPwOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [govOpen, setGovOpen] = useState(false);
   const [logoutOpen, setLogoutOpen] = useState(false);
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const bootState = useBootState();
 
   const [notesDraft, setNotesDraft] = useState(profile.notes);
   const [gov, setGov] = useState({
@@ -118,54 +124,57 @@ export function Profile() {
           </div>
         </Card>
 
-        {/* Appearance */}
+        {/* Appearance — theme only; nav blur is always on */}
         <SectionTitle>Appearance</SectionTitle>
-        <Card className="space-y-4">
-          <div>
-            <p className="mb-2 text-xs font-semibold text-slate-500 dark:text-slate-400">Theme</p>
-            <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1 dark:bg-white/5">
-              {(["system", "light", "dark"] as const).map((m) => {
-                const active = themeMode === m;
-                const iconName: IconName = m === "system" ? "refresh" : m === "light" ? "sun" : "moon";
-                return (
-                  <button
-                    key={m}
-                    onClick={() => setThemeMode(m)}
-                    className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-bold capitalize transition ${
-                      active
-                        ? "bg-white text-indigo-600 shadow-sm dark:bg-slate-800 dark:text-indigo-300"
-                        : "text-slate-500 dark:text-slate-400"
-                    }`}
-                  >
-                    <Icon name={iconName} size={14} />
-                    {m}
-                  </button>
-                );
-              })}
-            </div>
-            <p className="mt-1.5 text-[11px] text-slate-400">
-              {themeMode === "system" ? `Following device · currently ${dark ? "dark" : "light"}` : "Manual override"}
-            </p>
+        <Card>
+          <p className="mb-2 text-xs font-semibold text-slate-500 dark:text-slate-400">Theme</p>
+          <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1 dark:bg-white/5">
+            {(["system", "light", "dark"] as const).map((m) => {
+              const active = themeMode === m;
+              const iconName: IconName = m === "system" ? "refresh" : m === "light" ? "sun" : "moon";
+              return (
+                <button
+                  key={m}
+                  onClick={() => setThemeMode(m)}
+                  className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-bold capitalize transition ${
+                    active
+                      ? "bg-white text-indigo-600 shadow-sm dark:bg-slate-800 dark:text-indigo-300"
+                      : "text-slate-500 dark:text-slate-400"
+                  }`}
+                >
+                  <Icon name={iconName} size={14} />
+                  {m}
+                </button>
+              );
+            })}
           </div>
-
-          <ToggleRow
-            label="Nav bar blur"
-            hint="Frosted blur effect on top and bottom bars"
-            value={navBlur}
-            onChange={setNavBlur}
-          />
+          <p className="mt-1.5 text-[11px] text-slate-400">
+            {themeMode === "system" ? `Following device · currently ${dark ? "dark" : "light"}` : "Manual override"}
+          </p>
         </Card>
 
         {/* Shortcuts */}
         <SectionTitle>Shortcuts</SectionTitle>
         <div className="space-y-2">
           <NavRow icon="calendar" label="Change leave/OT date" onClick={() => navigate("change-leave")} />
+          <NavRow icon="swap" label="Coverage records" onClick={() => navigate("coverage-records")} disabled={!profile.isFlextime} disabledReason="Flextime employees only" />
           <NavRow icon="alert" label="Infractions" onClick={() => navigate("infractions")} />
           <NavRow icon="lock" label="Change password" onClick={() => setPwOpen(true)} />
           <NavRow icon="logout" label="Log out" onClick={() => setLogoutOpen(true)} danger />
         </div>
 
-        <p className="pb-2 text-center text-xs text-slate-400">Primer Communications · Employee Self-Service</p>
+        {/* App version */}
+          <SectionTitle>About</SectionTitle>
+          <Card>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Primer ESS</p>
+                <p className="text-xs text-slate-400 mt-0.5">Employee Self-Service</p>
+              </div>
+              <VersionBadge onUpdate={() => setUpdateOpen(true)} bootState={bootState} />
+            </div>
+          </Card>
+                  <p className="pb-2 text-center text-xs text-slate-400">Primer Communications · Employee Self-Service</p>
       </div>
 
       {/* Notes dialog */}
@@ -214,7 +223,190 @@ export function Profile() {
         </>}>
         <p>You'll need to sign in again. Device binding remains registered.</p>
       </Dialog>
+
+      {/* Update modal */}
+      <UpdateModal open={updateOpen} onClose={() => setUpdateOpen(false)} bootState={bootState} />
     </div>
+  );
+}
+
+
+// ─── Update UI ────────────────────────────────────────────────────────────────
+
+type BootState = ReturnType<typeof bootController.getState>;
+
+function VersionBadge({ onUpdate, bootState }: { onUpdate: () => void; bootState: BootState }) {
+  const remoteVersion = bootState.info?.currentVersion;
+  const hasUpdate = bootState.status === "updateAvailable" || bootState.status === "mandatoryUpdate";
+  return (
+    <div className="text-right">
+      <p className="font-mono text-sm font-bold text-indigo-600 dark:text-indigo-400">v{APP_VERSION}</p>
+      {hasUpdate ? (
+        <button
+          onClick={onUpdate}
+          className="mt-0.5 rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-bold text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
+        >
+          v{remoteVersion} available ↓
+        </button>
+      ) : bootState.status === "checking" ? (
+        <p className="text-[11px] text-slate-400">Checking…</p>
+      ) : (
+        <p className="text-[11px] text-emerald-500 font-semibold">Up to date</p>
+      )}
+    </div>
+  );
+}
+
+const PENDING_APK_KEY = "primer.pendingApkPath";
+
+function UpdateModal({
+  open,
+  onClose,
+  bootState,
+}: {
+  open: boolean;
+  onClose: () => void;
+  bootState: BootState;
+}) {
+  const [phase, setPhase] = useState<"idle" | "downloading" | "installing" | "done" | "error">("idle");
+  const [progress, setProgress] = useState<number | null>(null);
+  const [errMsg, setErrMsg] = useState("");
+
+  const startDownload = async () => {
+    const url = bootState.info?.androidDownloadUrl ?? "";
+    if (!url && Capacitor.isNativePlatform()) {
+      setErrMsg("No download URL set for this update. Contact your administrator.");
+      setPhase("error");
+      return;
+    }
+    try {
+      setPhase("downloading");
+      setProgress(0);
+      setErrMsg("");
+      await downloadAndInstallApk(url, { onProgress: (pct: number) => setProgress(pct) });
+      localStorage.setItem(PENDING_APK_KEY, url);
+      localStorage.removeItem(PENDING_APK_KEY);
+      setPhase("done");
+    } catch (e) {
+      const err = e as { kind?: string; message?: string };
+      setErrMsg(err.message ?? "Update failed. Please try again.");
+      setPhase(err.kind === "open" || err.kind === "permission" ? "installing" : "error");
+    }
+  };
+
+  const retryInstall = async () => {
+    const pending = localStorage.getItem(PENDING_APK_KEY) ?? "";
+    if (!pending) { setPhase("error"); setErrMsg("No pending update found."); return; }
+    try {
+      await downloadAndInstallApk(pending);
+      localStorage.removeItem(PENDING_APK_KEY);
+      setPhase("done");
+    } catch (e) {
+      setErrMsg((e as Error).message ?? "Install failed.");
+      setPhase("error");
+    }
+  };
+
+  const handleClose = () => {
+    if (phase === "downloading") return;
+    setPhase("idle"); setProgress(null); setErrMsg("");
+    onClose();
+  };
+
+  const remoteVersion = bootState.info?.currentVersion ?? "?";
+  const isMandatory = bootState.status === "mandatoryUpdate";
+  const hasUrl = !!bootState.info?.androidDownloadUrl;
+
+  let footer: React.ReactNode;
+  if (phase === "idle") {
+    footer = (
+      <>
+        {!isMandatory && <Button variant="secondary" full onClick={handleClose}>Later</Button>}
+        <Button full onClick={startDownload}>
+          {Capacitor.isNativePlatform() && hasUrl ? "Download & Install" : "View Update"}
+        </Button>
+      </>
+    );
+  } else if (phase === "downloading") {
+    footer = <Button full disabled>Downloading…</Button>;
+  } else if (phase === "installing") {
+    footer = (
+      <>
+        <Button variant="secondary" full onClick={handleClose}>Dismiss</Button>
+        <Button full onClick={retryInstall}>Install Now</Button>
+      </>
+    );
+  } else if (phase === "done") {
+    footer = <Button full onClick={handleClose}>Close</Button>;
+  } else {
+    footer = (
+      <>
+        <Button variant="secondary" full onClick={handleClose}>Cancel</Button>
+        <Button full onClick={() => { setPhase("idle"); setErrMsg(""); }}>Retry</Button>
+      </>
+    );
+  }
+
+  return (
+    <Dialog open={open} onClose={handleClose} title="Update available" footer={footer}>
+      {phase === "idle" && (
+        <>
+          <div className="flex items-center gap-3 rounded-xl bg-indigo-50 p-3 dark:bg-indigo-500/10">
+            <Icon name="refresh" size={20} className="text-indigo-600 dark:text-indigo-300" />
+            <div>
+              <p className="text-sm font-bold text-slate-800 dark:text-slate-100">v{remoteVersion} available</p>
+              <p className="text-xs text-slate-400">You are on v{APP_VERSION}</p>
+            </div>
+          </div>
+          {isMandatory && (
+            <p className="mt-2 rounded-lg bg-rose-50 p-2 text-xs font-semibold text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">
+              This update is required to continue using the app.
+            </p>
+          )}
+        </>
+      )}
+      {phase === "downloading" && (
+        <>
+          <p className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-200">
+            Downloading v{remoteVersion}…
+          </p>
+          <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-white/10">
+            <div
+              className="h-full rounded-full bg-indigo-600 transition-all duration-300"
+              style={{ width: progress != null ? `${progress}%` : "0%" }}
+            />
+          </div>
+          {progress != null && (
+            <p className="mt-1.5 text-right text-xs text-slate-400">{progress}%</p>
+          )}
+        </>
+      )}
+      {phase === "installing" && (
+        <div className="flex items-start gap-2">
+          <Icon name="check" size={18} className="mt-0.5 text-emerald-500" />
+          <div>
+            <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">APK downloaded</p>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {errMsg || "Tap Install Now. If prompted by Android, allow installation from this source."}
+            </p>
+          </div>
+        </div>
+      )}
+      {phase === "done" && (
+        <div className="flex items-start gap-2">
+          <Icon name="check" size={18} className="mt-0.5 text-emerald-500" />
+          <p className="text-sm text-slate-700 dark:text-slate-200">
+            Installer launched. Follow the on-screen steps to complete.
+          </p>
+        </div>
+      )}
+      {phase === "error" && (
+        <div className="flex items-start gap-2">
+          <Icon name="alert" size={18} className="mt-0.5 text-rose-500" />
+          <p className="text-sm text-rose-700 dark:text-rose-300">{errMsg || "Something went wrong."}</p>
+        </div>
+      )}
+    </Dialog>
   );
 }
 
@@ -227,41 +419,49 @@ function MiniCredit({ label, value }: { label: string; value: number }) {
   );
 }
 
-function NavRow({ icon, label, onClick, danger }: { icon: IconName; label: string; onClick: () => void; danger?: boolean }) {
-  return (
-    <button onClick={onClick}
-      className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-left transition active:scale-[0.99] dark:border-white/10 dark:bg-slate-800/60">
-      <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${danger ? "bg-rose-50 text-rose-600 dark:bg-rose-500/15 dark:text-rose-300" : "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300"}`}>
-        <Icon name={icon} size={18} />
-      </div>
-      <span className={`flex-1 text-sm font-semibold ${danger ? "text-rose-600 dark:text-rose-300" : "text-slate-700 dark:text-slate-200"}`}>{label}</span>
-      <Icon name="chevron" size={18} className="text-slate-300" />
-    </button>
-  );
-}
-
-function ToggleRow({ label, hint, value, onChange }: { label: string; hint?: string; value: boolean; onChange: (v: boolean) => void }) {
+function NavRow({
+  icon, label, onClick, danger, disabled, disabledReason,
+}: {
+  icon: IconName;
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
+}) {
   return (
     <button
-      type="button"
-      onClick={() => onChange(!value)}
-      className="flex w-full items-center justify-between gap-3 text-left"
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      title={disabled ? disabledReason : undefined}
+      className={`flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left transition active:scale-[0.99] ${
+        disabled
+          ? "cursor-not-allowed border-slate-200/50 bg-slate-50 opacity-50 dark:border-white/5 dark:bg-slate-800/30"
+          : "border-slate-200 bg-white dark:border-white/10 dark:bg-slate-800/60"
+      }`}
     >
-      <div>
-        <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">{label}</p>
-        {hint && <p className="text-[11px] text-slate-400">{hint}</p>}
+      <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${
+        disabled
+          ? "bg-slate-100 text-slate-400 dark:bg-slate-700 dark:text-slate-500"
+          : danger
+          ? "bg-rose-50 text-rose-600 dark:bg-rose-500/15 dark:text-rose-300"
+          : "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300"
+      }`}>
+        <Icon name={icon} size={18} />
       </div>
-      <span
-        className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition ${
-          value ? "bg-indigo-600" : "bg-slate-300 dark:bg-white/15"
-        }`}
-      >
-        <span
-          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${
-            value ? "translate-x-5" : "translate-x-0.5"
-          }`}
-        />
+      <span className={`flex-1 text-sm font-semibold ${
+        disabled
+          ? "text-slate-400 dark:text-slate-500"
+          : danger
+          ? "text-rose-600 dark:text-rose-300"
+          : "text-slate-700 dark:text-slate-200"
+      }`}>
+        {label}
+        {disabled && disabledReason && (
+          <span className="ml-2 text-[11px] font-normal text-slate-400">({disabledReason})</span>
+        )}
       </span>
+      {!disabled && <Icon name="chevron" size={18} className="text-slate-300" />}
     </button>
   );
 }

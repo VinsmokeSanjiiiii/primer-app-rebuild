@@ -246,7 +246,12 @@ function buildResult(
 export async function checkForUpdate(): Promise<UpdateCheckResult> {
   // 1. Try canonical path.
   try {
-    const raw = await readPath(PRIMARY_PATH);
+    let raw = await readPath(PRIMARY_PATH);
+    // Firebase AppVersion is sometimes stored as a plain version string (e.g. "0.5.0")
+    // rather than an object. Normalise it so normalise() can process it.
+    if (typeof raw === "string" && raw.trim()) {
+      raw = { currentVersion: raw.trim(), mandatory: true };
+    }
     const info = normalise(raw, "primary");
     if (info) {
       writeCache(info, "primary");

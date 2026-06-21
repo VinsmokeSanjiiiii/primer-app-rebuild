@@ -6,6 +6,7 @@ import {
   type BootState,
 } from "../lib/bootState";
 import { downloadAndInstallApk, InstallError } from "../lib/updateInstall";
+import { Capacitor } from "@capacitor/core";
 
 /**
  * Update gate driven by the central boot state machine.
@@ -23,7 +24,10 @@ export function UpdateGate({ children }: { children: React.ReactNode }) {
   // Local UI flag for "Later" on non-mandatory prompts during this session.
   const [dismissed, setDismissed] = useState(false);
 
+  // On web (non-native), we never hard-block: APK download doesn't apply in a browser.
+  const isNative = Capacitor.isNativePlatform();
   const blocking =
+    isNative &&
     !!result?.mandatory &&
     (status === "mandatoryUpdate" ||
       status === "downloading" ||

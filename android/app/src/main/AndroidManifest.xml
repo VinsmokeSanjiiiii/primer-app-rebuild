@@ -38,11 +38,4 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- LocalNotifications: required on Android 13+ to display notifications. -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- LocalNotifications: lets us schedule reminders that fire even when the app is closed. -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
 </manifest>
