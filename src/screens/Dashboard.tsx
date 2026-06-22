@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useApp } from "../store";
 import { Card, Avatar, Badge, Button, Dialog, Field, SectionTitle } from "../components/ui";
 import { Icon, type IconName } from "../components/Icon";
+import { PullToRefresh } from "../components/PullToRefresh";
 import { tenureFrom } from "../lib/date";
 
 const SEEN_INFRACTIONS_KEY = "primer_seen_infractions";
@@ -15,7 +16,7 @@ function loadSeenIds(): Set<string> {
 }
 
 export function Dashboard() {
-  const { profile, leaves, ot, infractions, navigate, notifications } = useApp();
+  const { profile, leaves, ot, infractions, navigate, notifications, refreshData } = useApp();
   const [reqOpen, setReqOpen] = useState(false);
   const unread = notifications.filter((n) => !n.readAt).length;
   const userInfractions = infractions.filter((i) => i.employeeId === profile.employeeId);
@@ -47,7 +48,8 @@ export function Dashboard() {
   ].sort((a, b) => b.ts - a.ts);
 
   return (
-    <div className="space-y-4 px-4 pb-6 pt-4">
+    <PullToRefresh className="flex-1" scrollClassName="px-4 pb-6 pt-4" onRefresh={refreshData}>
+    <div className="space-y-4">
       <div className="flex items-center gap-3">
         <Avatar url={profile.profileImageUrl} name={profile.fullName} size={52} />
         <div className="min-w-0 flex-1">
@@ -196,6 +198,7 @@ export function Dashboard() {
         </div>
       </Dialog>
     </div>
+    </PullToRefresh>
   );
 }
 

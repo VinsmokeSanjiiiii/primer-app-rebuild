@@ -51,7 +51,7 @@ export function Attendance() {
   return (
     <div className="flex h-full flex-col">
       <AppBar title="Attendance" subtitle="History & notes" />
-      <PullToRefresh className="flex-1 px-4 pb-6 pt-4" onRefresh={refreshData}>
+      <PullToRefresh className="flex-1" scrollClassName="px-4 pb-6 pt-4" onRefresh={refreshData}>
         <div className="space-y-4">
         {/* Filter */}
         <Card>
