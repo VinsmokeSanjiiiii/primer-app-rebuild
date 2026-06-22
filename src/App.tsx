@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { AppProvider, useApp } from "./store";
 import { Icon, type IconName } from "./components/Icon";
-import { PullToRefresh } from "./components/PullToRefresh";
 import { Splash } from "./screens/Splash";
 import { Login } from "./screens/Login";
 import { Dashboard } from "./screens/Dashboard";
@@ -46,7 +45,7 @@ const SCREENS: Record<ScreenId, () => React.ReactElement> = {
 };
 
 function Shell() {
-  const { screen, navigate, isAuthed, toasts, hasHydrated, navBlur, refreshData } = useApp();
+  const { screen, navigate, isAuthed, toasts, hasHydrated, navBlur } = useApp();
   const Screen = SCREENS[screen];
   const showNav = (["dashboard", "attendance", "requests", "profile"] as ScreenId[]).includes(screen);
 
@@ -56,7 +55,7 @@ function Shell() {
 
   return (
     <div className="flex h-full flex-col bg-slate-50 safe-top dark:bg-slate-950">
-      <PullToRefresh className="flex-1" onRefresh={refreshData}>
+      <div className="flex-1 min-h-0 overflow-hidden">
         {!hasHydrated ? (
           <LoadingState />
         ) : isAuthed ? (
@@ -64,7 +63,7 @@ function Shell() {
         ) : (
           <Login />
         )}
-      </PullToRefresh>
+      </div>
 
       {/* Bottom nav */}
       {isAuthed && showNav && (
