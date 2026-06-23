@@ -18,3 +18,20 @@ interface ImportMeta {
 }
 
 declare const __APP_VERSION__: string;
+
+// Optional native Capacitor Live Updates plugin. Loaded dynamically at runtime;
+// declared here so TypeScript doesn't require the package to be installed in
+// the web build.
+declare module "@capacitor/live-updates" {
+  export interface SyncResult {
+    activeApplicationPathChanged?: boolean;
+    [k: string]: unknown;
+  }
+  export function sync(opts?: unknown): Promise<SyncResult>;
+  export function reload(): Promise<void>;
+  export function addListener(
+    event: string,
+    handler: (data: { percent?: number; bytes?: number; total?: number }) => void,
+  ): Promise<{ remove: () => Promise<void> }> | { remove: () => void };
+}
+

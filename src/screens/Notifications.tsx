@@ -97,7 +97,7 @@ export function Notifications() {
           <p className="text-sm font-semibold text-rose-700 dark:text-rose-400">
             {selected.size} selected
           </p>
-          <Button size="sm" variant="danger" onClick={deleteSelected}>
+          <Button variant="danger" onClick={deleteSelected} className="px-3 py-1.5 text-xs">
             <Icon name="trash" size={14} />
             Delete {selected.size}
           </Button>

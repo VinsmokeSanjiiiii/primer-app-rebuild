@@ -59,7 +59,9 @@ function Shell() {
         {!hasHydrated ? (
           <LoadingState />
         ) : isAuthed ? (
-          <Screen />
+          <div key={screen} className="lv-page h-full">
+            <Screen />
+          </div>
         ) : (
           <Login />
         )}
@@ -67,21 +69,24 @@ function Shell() {
 
       {/* Bottom nav */}
       {isAuthed && showNav && (
-        <nav className={`flex items-center justify-around border-t border-slate-200/70 px-2 py-1.5 safe-bottom dark:border-white/10 ${navClass}`}>
+        <nav className={`relative flex items-center justify-around border-t border-slate-200/70 px-2 py-1 safe-bottom dark:border-white/10 ${navClass}`}>
           {NAV.map((n) => {
             const active = screen === n.id;
             return (
               <button
                 key={n.id}
                 onClick={() => navigate(n.id)}
-                className={`flex flex-1 flex-col items-center gap-0.5 rounded-2xl py-1.5 transition ${
-                  active ? "text-indigo-600 dark:text-indigo-400" : "text-slate-400"
+                className={`relative flex flex-1 flex-col items-center gap-0.5 rounded-2xl py-1.5 transition-colors duration-200 ${
+                  active ? "text-indigo-600 dark:text-indigo-300" : "text-slate-400 hover:text-slate-500 dark:hover:text-slate-300"
                 }`}
               >
-                <div className={`flex h-8 w-12 items-center justify-center rounded-full transition-all duration-200 ${active ? "bg-indigo-100 scale-105 dark:bg-indigo-500/15" : ""}`}>
+                <div className={`relative flex h-9 w-14 items-center justify-center rounded-full transition-all duration-300 ${active ? "bg-gradient-to-b from-indigo-100 to-indigo-50 shadow-sm shadow-indigo-500/10 scale-105 dark:from-indigo-500/25 dark:to-indigo-500/10" : ""}`}>
                   <Icon name={n.icon} size={20} />
                 </div>
-                <span className="text-[10px] font-semibold">{n.label}</span>
+                <span className={`text-[10px] font-semibold transition-opacity ${active ? "opacity-100" : "opacity-80"}`}>{n.label}</span>
+                {active && (
+                  <span className="absolute -top-px left-1/2 h-0.5 w-8 -translate-x-1/2 rounded-full bg-indigo-500 dark:bg-indigo-400" />
+                )}
               </button>
             );
           })}
@@ -93,7 +98,7 @@ function Shell() {
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={`pointer-events-auto flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white shadow-lg ${
+            className={`pointer-events-auto flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white shadow-lg animate-fade-in-up ${
               t.kind === "success" ? "bg-emerald-600" : t.kind === "error" ? "bg-rose-600" : "bg-slate-800"
             }`}
           >
@@ -107,7 +112,7 @@ function Shell() {
 }
 
 function Root() {
-  const { dark } = useApp();
+  const { dark, reduceMotion } = useApp();
   const [booted, setBooted] = useState(false);
 
   useEffect(() => {
@@ -118,11 +123,17 @@ function Root() {
     void applySystemBars(dark);
   }, [dark]);
 
+  useEffect(() => {
+    const el = document.documentElement;
+    if (reduceMotion) el.classList.add("lv-reduce-motion");
+    else el.classList.remove("lv-reduce-motion");
+  }, [reduceMotion]);
+
   return (
     <div className={dark ? "dark" : ""}>
-      <div className="flex min-h-screen items-center justify-center bg-slate-200 p-0 sm:p-6 dark:bg-slate-900">
+      <div className="flex min-h-screen items-center justify-center bg-slate-200 p-0 sm:p-6 transition-colors duration-300 dark:bg-slate-900">
         {/* Phone frame */}
-        <div className="relative h-[100dvh] w-full overflow-hidden bg-slate-50 shadow-2xl sm:h-[860px] sm:max-w-[420px] sm:rounded-[2.5rem] sm:ring-8 sm:ring-slate-900 dark:bg-slate-950">
+        <div className="relative h-[100dvh] w-full overflow-hidden bg-slate-50 shadow-2xl sm:h-[860px] sm:max-w-[420px] sm:rounded-[2.5rem] sm:ring-8 sm:ring-slate-900 transition-colors duration-300 dark:bg-slate-950">
           {!booted ? (
             <Splash onDone={() => setBooted(true)} />
           ) : (

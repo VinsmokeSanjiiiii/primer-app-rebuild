@@ -63,13 +63,16 @@ export function Dashboard() {
         </div>
         <button
           onClick={() => navigate("notifications")}
-          className="relative flex h-10 w-10 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10"
+          className="relative flex h-10 w-10 items-center justify-center rounded-full text-slate-600 transition active:scale-95 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10"
         >
           <Icon name="bell" size={20} />
           {unread > 0 && (
-            <span className="absolute right-1.5 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
-              {unread}
-            </span>
+            <>
+              <span className="pointer-events-none absolute right-1.5 top-1.5 h-4 w-4 rounded-full bg-rose-500 animate-ping-soft" />
+              <span className="absolute right-1.5 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white animate-pop ring-2 ring-white dark:ring-slate-900">
+                {unread}
+              </span>
+            </>
           )}
         </button>
       </div>
@@ -109,9 +112,8 @@ export function Dashboard() {
       </div>
 
       <SectionTitle>Quick actions</SectionTitle>
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         <QuickAction icon="plus" label="Request" onClick={() => setReqOpen(true)} />
-        <QuickAction icon="clock" label="Clock" onClick={() => navigate("clock")} />
         <QuickAction
           icon="swap"
           label="Coverage"

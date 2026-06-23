@@ -3,6 +3,7 @@ import {
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   useEffect,
+  useState,
   type TextareaHTMLAttributes,
 } from "react";
 import { cn } from "../utils/cn";
@@ -21,9 +22,9 @@ export function Card({
     <div
       onClick={onClick}
       className={cn(
-        "rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm",
-        "dark:border-white/10 dark:bg-slate-800/60",
-        onClick && "cursor-pointer transition active:scale-[0.99]",
+        "rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm shadow-slate-900/[0.03]",
+        "dark:border-white/[0.08] dark:bg-slate-800/70 dark:shadow-black/20",
+        onClick && "cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.99]",
         className,
       )}
     >
@@ -46,20 +47,20 @@ export function Button({
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   const variants = {
     primary:
-      "bg-indigo-600 text-white hover:bg-indigo-500 shadow-sm shadow-indigo-600/20 disabled:bg-indigo-300",
+      "bg-gradient-to-b from-indigo-500 to-indigo-600 text-white hover:from-indigo-500 hover:to-indigo-500 shadow-md shadow-indigo-600/25 disabled:from-indigo-300 disabled:to-indigo-300 disabled:shadow-none",
     secondary:
-      "border border-slate-300 text-slate-700 hover:bg-slate-50 dark:border-white/15 dark:text-slate-200 dark:hover:bg-white/5",
+      "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:border-slate-300 dark:border-white/15 dark:bg-white/[0.03] dark:text-slate-200 dark:hover:bg-white/5",
     tonal:
       "bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-indigo-500/25",
     ghost:
       "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5",
     danger:
-      "bg-rose-600 text-white hover:bg-rose-500 shadow-sm shadow-rose-600/20",
+      "bg-gradient-to-b from-rose-500 to-rose-600 text-white hover:from-rose-500 hover:to-rose-500 shadow-md shadow-rose-600/25",
   } as const;
   return (
     <button
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-70",
+        "inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-150 ease-out active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 disabled:cursor-not-allowed disabled:opacity-70",
         full && "w-full",
         variants[variant],
         className,
@@ -186,6 +187,21 @@ export function Dialog({
   children: ReactNode;
   footer?: ReactNode;
 }) {
+  const [mounted, setMounted] = useState(open);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      const t = requestAnimationFrame(() => setVisible(true));
+      return () => cancelAnimationFrame(t);
+    } else if (mounted) {
+      setVisible(false);
+      const t = setTimeout(() => setMounted(false), 200);
+      return () => clearTimeout(t);
+    }
+  }, [open, mounted]);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -193,11 +209,25 @@ export function Dialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!mounted) return null;
   return (
     <div className="absolute inset-0 z-50 flex items-end justify-center sm:items-center">
-      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative z-10 max-h-[88%] w-full overflow-y-auto rounded-t-3xl border border-slate-200 bg-white p-5 shadow-2xl sm:max-w-md sm:rounded-3xl dark:border-white/10 dark:bg-slate-800">
+      <div
+        className={cn(
+          "absolute inset-0 bg-slate-900/50 backdrop-blur-sm transition-opacity duration-200 ease-out",
+          visible ? "opacity-100" : "opacity-0",
+        )}
+        onClick={onClose}
+      />
+      <div
+        className={cn(
+          "relative z-10 max-h-[88%] w-full overflow-y-auto rounded-t-3xl border border-slate-200 bg-white p-5 shadow-2xl sm:max-w-md sm:rounded-3xl dark:border-white/10 dark:bg-slate-800",
+          "transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+          visible
+            ? "translate-y-0 opacity-100 sm:scale-100"
+            : "translate-y-6 opacity-0 sm:translate-y-0 sm:scale-95",
+        )}
+      >
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-lg font-bold text-slate-900 dark:text-white">{title}</h3>
           <IconButton name="x" onClick={onClose} />

@@ -58,7 +58,7 @@ export function Calendar({
           <span key={w}>{w}</span>
         ))}
       </div>
-      <div className="grid grid-cols-7 gap-1">
+      <div key={`${view.y}-${view.m}`} className="grid grid-cols-7 gap-1 animate-fade-in">
         {grid.map((d, i) => {
           if (!d) return <span key={i} />;
           const ds = fmtDate(d);
@@ -75,12 +75,12 @@ export function Calendar({
               title={reason || (isHoliday ? "Holiday" : isRequested ? "Already requested" : "")}
               onClick={() => !disabled && onToggle(ds)}
               className={cn(
-                "relative flex h-9 items-center justify-center rounded-lg text-sm font-medium transition",
+                "relative flex h-9 items-center justify-center rounded-lg text-sm font-medium transition-all duration-200 ease-out active:scale-90",
                 isSel
-                  ? "bg-indigo-600 text-white"
-                  : "text-slate-700 hover:bg-indigo-50 dark:text-slate-200 dark:hover:bg-white/5",
+                  ? "bg-indigo-600 text-white scale-105 shadow-md shadow-indigo-600/30 animate-pop"
+                  : "text-slate-700 hover:bg-indigo-50 hover:scale-105 dark:text-slate-200 dark:hover:bg-white/5",
                 disabled &&
-                  "cursor-not-allowed text-slate-300 line-through hover:bg-transparent dark:text-slate-600",
+                  "cursor-not-allowed text-slate-300 line-through hover:bg-transparent hover:scale-100 dark:text-slate-600",
                 isHoliday && !isSel && "text-rose-400",
                 isToday && !isSel && "ring-2 ring-indigo-400 ring-offset-2",
               )}

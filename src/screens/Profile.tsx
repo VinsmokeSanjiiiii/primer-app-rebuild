@@ -11,7 +11,7 @@ import { downloadAndInstallApk } from "../lib/updateCheck";
 import { Capacitor } from "@capacitor/core";
 
 export function Profile() {
-  const { profile, updateProfile, signOut, navigate, toggleDark, dark, toast, themeMode, setThemeMode, refreshData } = useApp();
+  const { profile, updateProfile, signOut, navigate, dark, toast, themeMode, setThemeMode, reduceMotion, setReduceMotion, refreshData } = useApp();
   const fileRef = useRef<HTMLInputElement>(null);
   const [pwOpen, setPwOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
@@ -41,11 +41,6 @@ export function Profile() {
       <AppBar
         title="Profile"
         showBack={false}
-        action={
-          <button onClick={toggleDark} className="flex h-10 w-10 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10">
-            <Icon name={dark ? "sun" : "moon"} size={20} />
-          </button>
-        }
       />
       <PullToRefresh className="flex-1" scrollClassName="px-4 pb-6 pt-4" onRefresh={refreshData}>
         <div className="space-y-4">
@@ -153,6 +148,28 @@ export function Profile() {
           <p className="mt-1.5 text-[11px] text-slate-400">
             {themeMode === "system" ? `Following device · currently ${dark ? "dark" : "light"}` : "Manual override"}
           </p>
+
+          <div className="mt-4 flex items-center justify-between border-t border-slate-200 pt-3 dark:border-white/10">
+            <div className="min-w-0 pr-3">
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Reduce motion</p>
+              <p className="text-[11px] text-slate-400">Minimizes animations across the app.</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={reduceMotion}
+              onClick={() => setReduceMotion(!reduceMotion)}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors duration-200 ${
+                reduceMotion ? "bg-indigo-600" : "bg-slate-300 dark:bg-white/15"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200 ${
+                  reduceMotion ? "translate-x-5" : "translate-x-0.5"
+                }`}
+              />
+            </button>
+          </div>
         </Card>
 
         {/* Shortcuts */}
@@ -286,7 +303,7 @@ function UpdateModal({
       setPhase("downloading");
       setProgress(0);
       setErrMsg("");
-      await downloadAndInstallApk(url, { onProgress: (pct: number) => setProgress(pct) });
+      await downloadAndInstallApk(url, { onProgress: (pct: number | null) => setProgress(pct ?? 0) });
       localStorage.setItem(PENDING_APK_KEY, url);
       localStorage.removeItem(PENDING_APK_KEY);
       setPhase("done");

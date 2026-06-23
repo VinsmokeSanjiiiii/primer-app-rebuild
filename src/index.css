@@ -6,9 +6,17 @@ html, body, #root {
   height: 100%;
 }
 
+html, body {
+  /* Smooth theme switching - cross-fade colors instead of hard cut */
+  transition: background-color 320ms cubic-bezier(0.22, 1, 0.36, 1),
+              color 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 body {
   margin: 0;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   background-color: #ffffff;
 }
@@ -34,4 +42,123 @@ body {
   --radius-md: 1rem;
   --radius-lg: 1.25rem;
   --radius-xl: 1.5rem;
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-snappy: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ============ Motion system ============ */
+@keyframes lv-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes lv-fade-in-up {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes lv-fade-in-down {
+  from { opacity: 0; transform: translate3d(0, -10px, 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes lv-scale-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes lv-pop {
+  0%   { transform: scale(0.6); opacity: 0; }
+  60%  { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); }
+}
+@keyframes lv-slide-up {
+  from { transform: translate3d(0, 100%, 0); }
+  to   { transform: translate3d(0, 0, 0); }
+}
+@keyframes lv-ping-soft {
+  0%   { transform: scale(1); opacity: 0.55; }
+  80%, 100% { transform: scale(2.2); opacity: 0; }
+}
+@keyframes lv-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes lv-page-in {
+  from { opacity: 0; transform: translate3d(0, 8px, 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes lv-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes lv-progress {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@utility animate-fade-in {
+  animation: lv-fade-in 220ms var(--ease-out-soft) both;
+}
+@utility animate-fade-in-up {
+  animation: lv-fade-in-up 320ms var(--ease-out-soft) both;
+}
+@utility animate-fade-in-down {
+  animation: lv-fade-in-down 260ms var(--ease-out-soft) both;
+}
+@utility animate-scale-in {
+  animation: lv-scale-in 220ms var(--ease-out-soft) both;
+}
+@utility animate-pop {
+  animation: lv-pop 380ms var(--ease-spring) both;
+}
+@utility animate-slide-up {
+  animation: lv-slide-up 320ms var(--ease-out-soft) both;
+}
+@utility animate-ping-soft {
+  animation: lv-ping-soft 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@utility animate-shimmer {
+  background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.18), transparent);
+  background-size: 200% 100%;
+  animation: lv-shimmer 1.4s linear infinite;
+}
+
+/* Page transition wrapper. No persistent will-change to keep text crisp. */
+.lv-page {
+  animation: lv-page-in 280ms var(--ease-out-soft) both;
+}
+
+/* Indeterminate progress bar (used by loading states). */
+.lv-progress {
+  position: relative;
+  overflow: hidden;
+}
+.lv-progress::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, currentColor, transparent);
+  opacity: 0.35;
+  animation: lv-progress 1.2s var(--ease-snappy) infinite;
+}
+
+/* Smoother default transitions for interactive surfaces */
+button, a, [role="button"] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Reduce-motion class controlled via Profile setting. */
+.lv-reduce-motion *,
+.lv-reduce-motion *::before,
+.lv-reduce-motion *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+  scroll-behavior: auto !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
 }
