@@ -1,0 +1,89 @@
+name: Release Dry Run
+
+# Manually preview the next release without writing anything.
+# Outputs the computed version, payload, and release notes as a
+# job summary so you can validate before merging to main.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Bump level (leave blank to auto-detect from commits)"
+        required: false
+        default: ""
+        type: choice
+        options: ["", patch, minor, major, skip]
+      mandatory:
+        description: "Preview as mandatory release"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Dry-run bump
+        id: dry
+        env:
+          DRY_RUN: "1"
+          FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
+          FIREBASE_DB_SECRET: ${{ secrets.FIREBASE_DB_SECRET }}
+          ANDROID_DOWNLOAD_URL: ${{ secrets.ANDROID_DOWNLOAD_URL }}
+          MIN_SUPPORTED_VERSION: ${{ secrets.MIN_SUPPORTED_VERSION }}
+          BUMP_INPUT: ${{ github.event.inputs.bump }}
+          MANDATORY_INPUT: ${{ github.event.inputs.mandatory }}
+          COMMIT_MSG: ${{ github.event.head_commit.message || github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          node scripts/bump-version.mjs | tee dry-run.log
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Release dry-run"
+            echo '```'
+            cat dry-run.log || echo "(no output)"
+            echo '```'
+            if [ -n "${{ steps.dry.outputs.newVersion }}" ]; then
+              echo ""
+              echo "**Next version:** \`${{ steps.dry.outputs.newVersion }}\` (from \`${{ steps.dry.outputs.previousVersion }}\`)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Comment on PR
+        if: github.event_name == 'pull_request' && steps.dry.outputs.changed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const log = fs.readFileSync('dry-run.log', 'utf8');
+            const body = [
+              '### Release dry-run preview',
+              `**Next version:** \`${{ steps.dry.outputs.newVersion }}\` ` +
+              `(from \`${{ steps.dry.outputs.previousVersion }}\`)`,
+              '',
+              '<details><summary>bump log</summary>',
+              '',
+              '```',
+              log.slice(0, 6000),
+              '```',
+              '</details>',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });

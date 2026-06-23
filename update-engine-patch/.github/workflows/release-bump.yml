@@ -1,0 +1,97 @@
+name: Release Bump
+
+# Runs on every push to main. Bumps version, snapshots the previous
+# /AppVersion into /AppVersionHistory, writes the new /AppVersion, prepends
+# the changelog, commits + tags, and publishes a GitHub Release.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Bump level"
+        required: true
+        default: "patch"
+        type: choice
+        options: [patch, minor, major, skip]
+      mandatory:
+        description: "Mark this release as mandatory"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-bump
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, 'chore(release):')"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run update-engine unit + integration tests
+        run: node scripts/test-update-engine.mjs
+
+  bump:
+    needs: test
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, 'chore(release):')"
+    outputs:
+      newVersion: ${{ steps.run.outputs.newVersion }}
+      previousVersion: ${{ steps.run.outputs.previousVersion }}
+      changed: ${{ steps.run.outputs.changed }}
+      releaseNotes: ${{ steps.run.outputs.releaseNotes }}
+    steps:
+      - name: Checkout (full history for tag detection)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Run bump + RTDB sync
+        id: run
+        env:
+          FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
+          FIREBASE_DB_SECRET: ${{ secrets.FIREBASE_DB_SECRET }}
+          ANDROID_DOWNLOAD_URL: ${{ secrets.ANDROID_DOWNLOAD_URL }}
+          MIN_SUPPORTED_VERSION: ${{ secrets.MIN_SUPPORTED_VERSION }}
+          BUMP_INPUT: ${{ github.event.inputs.bump }}
+          MANDATORY_INPUT: ${{ github.event.inputs.mandatory }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: node scripts/bump-version.mjs
+
+      - name: Push commit + tag
+        if: steps.run.outputs.changed == 'true'
+        run: |
+          if git diff --quiet HEAD; then
+            echo "No changes to push."
+            exit 0
+          fi
+          git push origin HEAD:main --follow-tags
+
+      - name: Create GitHub Release
+        if: steps.run.outputs.changed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.run.outputs.newVersion }}
+          name: v${{ steps.run.outputs.newVersion }}
+          body: ${{ steps.run.outputs.releaseNotes }}
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,49 @@
+name: Rollback Release
+
+# Restore /AppVersion from /AppVersionHistory/<target>. The current
+# /AppVersion is backed up before being overwritten — nothing is lost.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Version to roll back to (e.g. 1.2.3 — must exist in /AppVersionHistory)"
+        required: true
+        type: string
+      dry_run:
+        description: "Preview only — do not write to RTDB"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-rollback
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run rollback
+        env:
+          FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
+          FIREBASE_DB_SECRET: ${{ secrets.FIREBASE_DB_SECRET }}
+          ROLLBACK_TO: ${{ github.event.inputs.target }}
+          DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '' }}
+        run: node scripts/rollback-version.mjs
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Rollback"
+            echo "- target: \`${{ github.event.inputs.target }}\`"
+            echo "- dry-run: \`${{ github.event.inputs.dry_run }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

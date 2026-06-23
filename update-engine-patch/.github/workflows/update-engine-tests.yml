@@ -1,0 +1,23 @@
+name: Update Engine Tests
+
+on:
+  push:
+    paths:
+      - "scripts/bump-version.mjs"
+      - "scripts/rollback-version.mjs"
+      - "scripts/test-update-engine.mjs"
+      - ".github/workflows/update-engine-tests.yml"
+  pull_request:
+    paths:
+      - "scripts/bump-version.mjs"
+      - "scripts/rollback-version.mjs"
+      - "scripts/test-update-engine.mjs"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: node scripts/test-update-engine.mjs
