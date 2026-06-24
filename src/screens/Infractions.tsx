@@ -54,9 +54,7 @@ export function Infractions() {
               </div>
 
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                {i.infractionId && <Field label="Infraction ID" value={i.infractionId} />}
                 {i.daysOff && <Field label="Days Off" value={i.daysOff} />}
-                {i.phoneName && <Field label="Phone Name" value={i.phoneName} />}
                 {i.schedule && <Field label="Schedule" value={i.schedule} />}
                 {i.month && <Field label="Month" value={i.month} />}
                 {i.year !== undefined && <Field label="Year" value={String(i.year)} />}
@@ -69,16 +67,32 @@ export function Infractions() {
                 </div>
               )}
 
-              {i.driveLink && (
-                <button
-                  type="button"
-                  onClick={() => { void openExternal(i.driveLink!); }}
-                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition active:scale-95 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-indigo-500/25"
-                >
-                  <Icon name="download" size={14} />
-                  View attachment
-                </button>
-              )}
+              {(() => {
+                const link = (i.driveLink ?? "").trim();
+                const isValid = /^https?:\/\//i.test(link);
+                if (isValid) {
+                  return (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void openExternal(link);
+                      }}
+                      className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition active:scale-95 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-indigo-500/25"
+                    >
+                      <Icon name="download" size={14} />
+                      View attachment
+                    </button>
+                  );
+                }
+                return (
+                  <span className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-400 dark:bg-white/5 dark:text-slate-500">
+                    <Icon name="download" size={14} />
+                    No attachment
+                  </span>
+                );
+              })()}
             </Card>
           ))
         )}

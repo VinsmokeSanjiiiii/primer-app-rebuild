@@ -20,6 +20,8 @@ interface CalendarProps {
   holidays?: string[];
   /** dates already requested (M/d/yyyy) */
   requested?: string[];
+  /** extra dates that must be disabled with a custom reason */
+  extraDisabled?: Map<string, string>;
   single?: boolean;
 }
 
@@ -29,6 +31,7 @@ export function Calendar({
   disabledReason,
   holidays = [],
   requested = [],
+  extraDisabled,
   single,
 }: CalendarProps) {
   const today = startOfDay(serverNow());
@@ -67,12 +70,19 @@ export function Calendar({
           const isHoliday = holidays.includes(ds);
           const isRequested = requested.includes(ds);
           const reason = disabledReason ? disabledReason(d) : null;
-          const disabled = !!reason || isHoliday || isRequested;
+          const extraReason = extraDisabled?.get(ds) ?? null;
+          const isDayOff = reason === "Day off";
+          const disabled = !!reason || !!extraReason || isHoliday || isRequested;
+          const title =
+            extraReason ||
+            reason ||
+            (isHoliday ? "Holiday" : isRequested ? "Already requested" : "");
           return (
             <button
               key={i}
               disabled={disabled}
-              title={reason || (isHoliday ? "Holiday" : isRequested ? "Already requested" : "")}
+              title={title}
+              aria-disabled={disabled}
               onClick={() => !disabled && onToggle(ds)}
               className={cn(
                 "relative flex h-9 items-center justify-center rounded-lg text-sm font-medium transition-all duration-200 ease-out active:scale-90",
@@ -81,6 +91,7 @@ export function Calendar({
                   : "text-slate-700 hover:bg-indigo-50 hover:scale-105 dark:text-slate-200 dark:hover:bg-white/5",
                 disabled &&
                   "cursor-not-allowed text-slate-300 line-through hover:bg-transparent hover:scale-100 dark:text-slate-600",
+                (isDayOff || isHoliday) && !isSel && "bg-slate-100/70 dark:bg-white/5",
                 isHoliday && !isSel && "text-rose-400",
                 isToday && !isSel && "ring-2 ring-indigo-400 ring-offset-2",
               )}

@@ -16,46 +16,79 @@ database are preserved exactly.
 
 | Layer            | Choice                                                |
 | ---------------- | ----------------------------------------------------- |
-| UI               | React 19 + Vite 7 + Tailwind CSS 4                    |
+| UI               | React 19 + Vite 8 + Tailwind CSS 4 + TypeScript 5     |
+| Typography       | `@fontsource-variable/inter`, `plus-jakarta-sans`     |
 | State            | Custom React context (`src/store.tsx`)                |
 | Data             | Firebase Realtime Database (`primerdb2`)              |
 | Auth (passwords) | `/Users` lookup in RTDB, password compared in-app     |
 | Auth (reset)     | Supabase Edge Function OTP (6-digit code)             |
 | Biometrics       | WebAuthn / Passkeys (platform authenticator)          |
-| Mobile           | Capacitor 7 (Android wrapper in `android/`)           |
+| Mobile           | Capacitor 7 (Android wrapper in `android/`, iOS in `ios/`) |
+| Offline cache    | Per-user snapshot in `localStorage` for instant load  |
+
+---
+
+## Project structure
+
+```
+src/
+  App.tsx              Shell, bottom-nav, theme + toast wiring
+  store.tsx            Auth, navigation, data state, snapshot cache
+  types.ts             Domain models
+  components/          UI primitives (AppBar, Calendar, PullToRefresh, …)
+  screens/             One file per route (Dashboard, Clock, LeaveRequest, …)
+  data/                Repository layer (Firebase RTDB + Supabase OTP)
+  lib/                 Pure helpers (date, leaveRules, reminders, biometric, …)
+android/               Capacitor Android wrapper
+ios/                   Capacitor iOS wrapper
+supabase/functions/    Edge function for password-reset OTP
+scripts/               Release version bump / rollback helpers
+```
 
 ---
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) 1.1+ (or npm / pnpm — Bun is what the lockfile uses)
-- Node 20+ for the Capacitor tooling
-- A modern browser for development (Chrome / Safari / Edge / Firefox)
+- [pnpm](https://pnpm.io) 9+ (preferred; lockfile is `pnpm-lock.yaml`)
+  Bun / npm also work but pnpm is the supported workflow.
+- Node 20+ for Capacitor tooling
+- A modern browser for development
 - Android Studio if you intend to rebuild the Android wrapper
+- Xcode (macOS) if you intend to rebuild the iOS wrapper
 
 ## Install
 
 ```bash
-bun install
+pnpm install
 ```
 
 ## Run the web app
 
 ```bash
-bun run dev
-# open http://localhost:5173
+pnpm dev
+# vite preview opens on http://localhost:8080
+# also boots the local Express helper on port 3000 (see server/index.js)
 ```
 
 ## Production build
 
 ```bash
-bun run build
-bun run preview
+pnpm build
+pnpm preview
 ```
 
 The build uses `vite-plugin-singlefile`, so `dist/index.html` is a fully
 inlined bundle that can be served from any static host (or copied into
-the Capacitor Android `assets/public/` folder).
+the Capacitor `assets/public/` folder).
+
+## Tests
+
+```bash
+pnpm test          # one-shot run
+pnpm test:watch    # watch mode
+```
+
+
 
 ---
 
@@ -212,15 +245,26 @@ The Infractions page loads all fields from `/InfractionList`:
 ## Android build
 
 ```bash
-bun run build
-bunx cap sync android
+pnpm build
+pnpm exec cap sync android
 cd android && ./gradlew assembleDebug
+# or, on Windows with Android Studio installed:
+pnpm build:apk
 ```
 
 The wrapper lives under `android/`. The display name is
 **Primer Communications** (`capacitor.config.ts > appName`); the
 package id stays `com.primer.app` so existing installs upgrade
 in place.
+
+## iOS build
+
+```bash
+pnpm build
+pnpm exec cap sync ios
+open ios/App/App.xcworkspace
+```
+
 
 ---
 

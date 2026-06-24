@@ -22,6 +22,8 @@
     "@capacitor/local-notifications": "^8.2.0",
     "@capacitor/status-bar": "^8.0.2",
     "@capawesome-team/capacitor-file-opener": "^8.0.1",
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/plus-jakarta-sans": "^5.2.8",
     "@hugotomazi/capacitor-navigation-bar": "^4.0.1",
     "@supabase/supabase-js": "^2.108.2",
     "clsx": "2.1.1",

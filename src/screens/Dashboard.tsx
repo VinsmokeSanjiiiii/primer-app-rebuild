@@ -48,7 +48,7 @@ export function Dashboard() {
   ].sort((a, b) => b.ts - a.ts);
 
   return (
-    <PullToRefresh className="flex-1" scrollClassName="px-4 pb-6 pt-4" onRefresh={refreshData}>
+    <PullToRefresh className="h-full" scrollClassName="px-4 pb-6 pt-4" onRefresh={refreshData}>
     <div className="space-y-4">
       <div className="flex items-center gap-3">
         <Avatar url={profile.profileImageUrl} name={profile.fullName} size={52} />

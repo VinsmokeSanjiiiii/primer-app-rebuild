@@ -159,13 +159,13 @@ export function Profile() {
               role="switch"
               aria-checked={reduceMotion}
               onClick={() => setReduceMotion(!reduceMotion)}
-              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors duration-200 ${
+              className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 ${
                 reduceMotion ? "bg-indigo-600" : "bg-slate-300 dark:bg-white/15"
               }`}
             >
               <span
-                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200 ${
-                  reduceMotion ? "translate-x-5" : "translate-x-0.5"
+                className={`pointer-events-none block h-6 w-6 rounded-full bg-white shadow-sm ring-0 transition-transform duration-200 ease-out ${
+                  reduceMotion ? "translate-x-5" : "translate-x-0"
                 }`}
               />
             </button>

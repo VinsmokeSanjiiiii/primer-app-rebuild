@@ -5,8 +5,12 @@ import { Card, Button, Dialog, TextArea } from "../components/ui";
 import { Calendar } from "../components/Calendar";
 import { Icon, type IconName } from "../components/Icon";
 import {
-  parseDate, startOfDay, serverNow, daysBetween, monthName, WEEKDAYS,
+  parseDate, startOfDay, serverNow, daysBetween, monthName, fmtDate, buildMonthGrid,
 } from "../lib/date";
+import {
+  parseDaysOff, validateSelection, wouldExceedCap, committedLeaveDates,
+  consecutiveRunLength, MAX_PER_REQUEST, MAX_CONSECUTIVE_BLOCK,
+} from "../lib/leaveRules";
 import type { LeaveType } from "../types";
 
 const LEAVE_TYPES: { type: LeaveType; icon: IconName; desc: string }[] = [
@@ -24,17 +28,9 @@ export function LeaveRequest() {
   const [review, setReview] = useState(false);
   const [creditWarn, setCreditWarn] = useState(false);
 
-  const dayOffIdx = useMemo(() => {
-    const set = new Set<number>();
-    profile.daysOff.split(/[,/]/).forEach((d) => {
-      const i = WEEKDAYS.findIndex((w) => d.trim().toLowerCase().startsWith(w.toLowerCase()));
-      const full = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"]
-        .findIndex((w) => d.trim().toLowerCase() === w);
-      if (i >= 0) set.add(i);
-      if (full >= 0) set.add(full);
-    });
-    return set;
-  }, [profile.daysOff]);
+  const dayOffIdx = useMemo(() => parseDaysOff(profile.daysOff), [profile.daysOff]);
+
+  const holidaySet = useMemo(() => new Set(holidays.map((h) => h.hdate)), [holidays]);
 
   const requestedDates = useMemo(
     () => leaves.filter((l) => l.status !== "Cancelled" && l.status !== "Declined").flatMap((l) => l.leaveDate),
@@ -64,6 +60,39 @@ export function LeaveRequest() {
     return null;
   };
 
+  /** Dates that would push the consecutive run over the 5-day cap, given current draft + committed leaves. */
+  const extraDisabled = useMemo(() => {
+    if (single) return new Map<string, string>();
+    const map = new Map<string, string>();
+    // Scan three months around today (prev/current/next) — wide enough for the calendar view.
+    const today = startOfDay(serverNow());
+    const months = [
+      buildMonthGrid(today.getFullYear(), today.getMonth() - 1),
+      buildMonthGrid(today.getFullYear(), today.getMonth()),
+      buildMonthGrid(today.getFullYear(), today.getMonth() + 1),
+      buildMonthGrid(today.getFullYear(), today.getMonth() + 2),
+    ];
+    const committed = committedLeaveDates(leaves);
+    for (const ds of dates) committed.add(ds);
+    for (const grid of months) {
+      for (const d of grid) {
+        if (!d) continue;
+        const ds = fmtDate(d);
+        if (dates.includes(ds)) continue;
+        if (dayOffIdx.has(d.getDay()) || holidaySet.has(ds)) continue;
+        if (committed.has(ds)) continue;
+        // Simulate
+        const sim = new Set(committed);
+        sim.add(ds);
+        const len = consecutiveRunLength(d, sim, dayOffIdx, holidaySet);
+        if (len > MAX_CONSECUTIVE_BLOCK) {
+          map.set(ds, `Would exceed ${MAX_CONSECUTIVE_BLOCK} consecutive leave days`);
+        }
+      }
+    }
+    return map;
+  }, [leaves, dates, dayOffIdx, holidaySet, single]);
+
   const toggle = (ds: string) => {
     if (single) {
       setDates([ds]);
@@ -72,20 +101,34 @@ export function LeaveRequest() {
     setDates((prev) => {
       if (prev.includes(ds)) return prev.filter((x) => x !== ds);
       const next = [...prev, ds].sort((a, b) => parseDate(a).getTime() - parseDate(b).getTime());
-      // max 3 consecutive
-      if (next.length > 3) {
-        toast("Maximum 3 consecutive days per leave request.", "error");
+
+      // Cap per-request first (clearer message)
+      if (next.length > MAX_PER_REQUEST) {
+        toast(`Maximum ${MAX_PER_REQUEST} consecutive days per leave request.`, "error");
         return prev;
       }
       const first = parseDate(next[0]);
       const last = parseDate(next[next.length - 1]);
-      if (daysBetween(first, last) > 2) {
-        toast("Selected dates must be within 3 consecutive days.", "error");
+      if (daysBetween(first, last) > MAX_PER_REQUEST - 1) {
+        toast(`Selected dates must be within ${MAX_PER_REQUEST} consecutive days.`, "error");
         return prev;
       }
+
+      // Combined 5-day block check (leaves + days off + holidays)
+      if (wouldExceedCap(parseDate(ds), {
+        leaves, dayOffIdx, holidays: holidaySet, currentSelection: prev,
+      })) {
+        toast(
+          `Total consecutive leave days cannot exceed ${MAX_CONSECUTIVE_BLOCK} (Days off and holidays count).`,
+          "error",
+        );
+        return prev;
+      }
+
       return next;
     });
   };
+
 
   const selectType = (t: LeaveType) => {
     setType(t);
@@ -121,6 +164,15 @@ export function LeaveRequest() {
   const confirm = () => {
     if (!type) return;
     const sorted = [...dates].sort((a, b) => parseDate(a).getTime() - parseDate(b).getTime());
+    // Defense-in-depth: re-validate against the latest leaves at submit time
+    if (type !== "Birthday Leave") {
+      const err = validateSelection(sorted, leaves, dayOffIdx, holidaySet);
+      if (err) {
+        toast(err, "error");
+        setReview(false);
+        return;
+      }
+    }
     submitLeave({
       employeeId: profile.employeeId,
       phoneName: profile.phoneName,
@@ -173,6 +225,7 @@ export function LeaveRequest() {
               disabledReason={disabledReason}
               holidays={holidays.map((h) => h.hdate)}
               requested={requestedDates}
+              extraDisabled={extraDisabled}
               single={single}
             />
 

@@ -51,6 +51,40 @@ const SESSION_KEY = "primer_portal_session";
 const THEME_KEY = "primer_portal_theme";
 const NAV_BLUR_KEY = "primer_portal_nav_blur";
 const REDUCE_MOTION_KEY = "primer_portal_reduce_motion";
+const CACHE_KEY = (empId: string) => `primer_portal_cache_${empId}`;
+
+interface CachedSnapshot {
+  v: 1;
+  savedAt: number;
+  profile: Profile | null;
+  attendance: AttendanceRecord[];
+  leaves: LeaveRequest[];
+  ot: OtRequest[];
+  coverage: CoverageRequest[];
+  infractions: Infraction[];
+  holidays: Holiday[];
+  notifications: AppNotification[];
+}
+
+function loadSnapshot(empId: string): CachedSnapshot | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY(empId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedSnapshot;
+    return parsed && parsed.v === 1 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSnapshot(empId: string, snap: Omit<CachedSnapshot, "v" | "savedAt">): void {
+  try {
+    const full: CachedSnapshot = { v: 1, savedAt: Date.now(), ...snap };
+    localStorage.setItem(CACHE_KEY(empId), JSON.stringify(full));
+  } catch {
+    /* quota / serialization errors are non-fatal */
+  }
+}
 
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -387,6 +421,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setInfractions(i);
       setHolidays(h);
       setNotifications(notifs);
+
+      // Persist a snapshot for instant-load on next app start.
+      saveSnapshot(empId, {
+        profile: p,
+        attendance: reconciled.attendance,
+        leaves: l,
+        ot: o,
+        coverage: coverageList,
+        infractions: i,
+        holidays: h,
+        notifications: notifs,
+      });
       return p;
     },
     [repo],
@@ -458,9 +504,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const signOut = useCallback(() => {
+    const empId = session?.employeeId;
     setSession(null);
     localStorage.removeItem(SESSION_KEY);
     sessionStorage.removeItem(SESSION_KEY);
+    if (empId) {
+      try { localStorage.removeItem(CACHE_KEY(empId)); } catch { /* ignore */ }
+    }
     // Per-user backups stay until a successful sync; on explicit sign-out,
     // purge them — the user is deliberately ending their session.
     purgeAllActiveSessions();
@@ -468,7 +518,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setScreen("dashboard");
     setStack([]);
     repo.signOut().catch(() => {});
-  }, [repo]);
+  }, [repo, session?.employeeId]);
 
   // ---- theme: legacy toggle cycles system → light → dark → system ----
   const toggleDark = useCallback(() => {
@@ -512,28 +562,47 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [hasHydrated, setHasHydrated] = useState(false);
   useEffect(() => {
     if (hasHydrated) return;
+    let cancelled = false;
+
+    // Phase 1: instant paint from cached snapshot (synchronous, no network).
+    // This lets the dashboard render the user's data immediately while the
+    // live fetch happens in the background.
+    try {
+      const sessionEmp = session?.employeeId;
+      if (sessionEmp) {
+        const snap = loadSnapshot(sessionEmp);
+        if (snap) {
+          if (snap.profile) setProfile(snap.profile);
+          setAttendance(snap.attendance ?? []);
+          setLeaves(snap.leaves ?? []);
+          setOt(snap.ot ?? []);
+          setCoverage(snap.coverage ?? []);
+          setInfractions(snap.infractions ?? []);
+          setHolidays(snap.holidays ?? []);
+          setNotifications(snap.notifications ?? []);
+          setHasHydrated(true);
+        }
+      }
+    } catch { /* non-fatal */ }
+
+    // Phase 2: background live fetch — refresh from server without blocking UI.
     (async () => {
       try {
-        // First, cache the Firebase server-time offset so that
-        // `serverNow()` is accurate for clock-in/out, note locks, and
-        // any other server-anchored timestamp logic.
         const offset = await repo.getServerTimeOffsetMs();
-        if (typeof offset === "number") setServerTimeOffsetMs(offset);
+        if (!cancelled && typeof offset === "number") setServerTimeOffsetMs(offset);
 
-        // Check if there's a session from a previous login
         const sessionEmp = (await repo.getSession())?.employeeId;
-        if (sessionEmp) {
-          // Hydrate all data for the logged-in user
+        if (sessionEmp && !cancelled) {
           await hydrateAll(sessionEmp);
         }
-        // If no session, keep empty state - user needs to log in
-        setHasHydrated(true);
+        if (!cancelled) setHasHydrated(true);
       } catch {
-        // If hydration fails, still mark as hydrated but keep empty state
-        setHasHydrated(true);
+        if (!cancelled) setHasHydrated(true);
       }
     })();
-  }, [repo, hasHydrated, hydrateAll]);
+
+    return () => { cancelled = true; };
+  }, [repo, hasHydrated, hydrateAll, session?.employeeId]);
 
   // ---- refreshData: manual re-hydration for pull-to-refresh ----
   const refreshData = useCallback(async () => {

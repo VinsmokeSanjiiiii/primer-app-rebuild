@@ -6,8 +6,28 @@ import { Icon } from "../components/Icon";
 import { serverNow, deviceTimeIsSafe, fmtTime, fmtDate } from "../lib/date";
 import { scheduleShiftReminders } from "../lib/reminders";
 
-const SHIFT_START = "08:45";
-const SHIFT_END = "18:00";
+const REMINDER_LEAD_MIN = 5;
+
+/** Parse a schedule string like "08:45-18:00" or "00:00 - 09:00" into HH:MM start/end. */
+function parseSchedule(schedule: string): { start: string; end: string } | null {
+  if (!schedule) return null;
+  const m = /(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})/.exec(schedule);
+  if (!m) return null;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const sh = Number(m[1]), sm = Number(m[2]), eh = Number(m[3]), em = Number(m[4]);
+  if ([sh, sm, eh, em].some((n) => Number.isNaN(n))) return null;
+  return { start: `${pad(sh)}:${pad(sm)}`, end: `${pad(eh)}:${pad(em)}` };
+}
+
+/** Subtract N minutes from an HH:MM string, wrapping across midnight. */
+function shiftMinutes(hhmm: string, deltaMin: number): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  let total = h * 60 + m + deltaMin;
+  total = ((total % 1440) + 1440) % 1440;
+  const nh = Math.floor(total / 60);
+  const nm = total % 60;
+  return `${String(nh).padStart(2, "0")}:${String(nm).padStart(2, "0")}`;
+}
 
 export function Clock() {
   const { profile, clockIn, clockOut, navigate, attendance, clockBusy } = useApp();
@@ -41,10 +61,20 @@ export function Clock() {
     };
   }, []);
 
-  // Schedule native Android shift reminders (no-op on web).
+  // Compute per-user shift reminders from profile.schedule, 5 min early.
+  const sched = parseSchedule(profile.schedule);
+  const shiftStartReminder = sched ? shiftMinutes(sched.start, -REMINDER_LEAD_MIN) : null;
+  const shiftEndReminder = sched ? shiftMinutes(sched.end, -REMINDER_LEAD_MIN) : null;
+
+  // Schedule native Android shift reminders (no-op on web). Re-schedules when
+  // the user's profile schedule changes.
   useEffect(() => {
-    void scheduleShiftReminders({ shiftStart: SHIFT_START, shiftEnd: SHIFT_END });
-  }, []);
+    if (!shiftStartReminder && !shiftEndReminder) return;
+    void scheduleShiftReminders({
+      shiftStart: shiftStartReminder ?? undefined,
+      shiftEnd: shiftEndReminder ?? undefined,
+    });
+  }, [shiftStartReminder, shiftEndReminder]);
 
   const safe = deviceTimeIsSafe();
   const skewMs = Math.abs(Date.now() - serverNow().getTime());
@@ -188,12 +218,18 @@ export function Clock() {
           <p className="mb-2 flex items-center gap-2 text-sm font-bold text-slate-800 dark:text-slate-100">
             <Icon name="bell" size={16} /> Scheduled reminders
           </p>
-          <div className="space-y-2 text-sm">
-            <ReminderRow label="Shift start reminder" time={SHIFT_START} tone="indigo" />
-            <ReminderRow label="Shift end reminder" time={SHIFT_END} tone="sky" />
-          </div>
+          {sched ? (
+            <div className="space-y-2 text-sm">
+              <ReminderRow label="Shift start reminder" time={shiftStartReminder!} tone="indigo" sub={`Shift starts ${sched.start}`} />
+              <ReminderRow label="Shift end reminder" time={shiftEndReminder!} tone="sky" sub={`Shift ends ${sched.end}`} />
+            </div>
+          ) : (
+            <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
+              No schedule set on your profile — reminders disabled.
+            </p>
+          )}
           <p className="mt-3 rounded-lg bg-slate-50 p-2 text-xs text-slate-400 dark:bg-white/5">
-            Delivered via native notifications — fires even when the app is closed.
+            Reminders fire 5 minutes before your shift start and end, via native notifications even when the app is closed.
           </p>
         </Card>
 
@@ -209,14 +245,19 @@ function ReminderRow({
   label,
   time,
   tone,
+  sub,
 }: {
   label: string;
   time: string;
   tone: "indigo" | "sky";
+  sub?: string;
 }) {
   return (
     <div className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 dark:border-white/10">
-      <span className="text-slate-600 dark:text-slate-300">{label}</span>
+      <div className="min-w-0">
+        <p className="text-slate-600 dark:text-slate-300">{label}</p>
+        {sub && <p className="text-[11px] text-slate-400">{sub}</p>}
+      </div>
       <Badge tone={tone}>{time}</Badge>
     </div>
   );
