@@ -3,6 +3,7 @@ import { useApp } from "../store";
 import { AppBar } from "../components/AppBar";
 import { Card, Badge, EmptyState, Field } from "../components/ui";
 import { Icon } from "../components/Icon";
+import { openExternal } from "../lib/openExternal";
 
 const SEEN_INFRACTIONS_KEY = "primer_seen_infractions";
 
@@ -69,15 +70,14 @@ export function Infractions() {
               )}
 
               {i.driveLink && (
-                <a
-                  href={i.driveLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-indigo-500/25"
+                <button
+                  type="button"
+                  onClick={() => { void openExternal(i.driveLink!); }}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition active:scale-95 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-indigo-500/25"
                 >
                   <Icon name="download" size={14} />
                   View attachment
-                </a>
+                </button>
               )}
             </Card>
           ))

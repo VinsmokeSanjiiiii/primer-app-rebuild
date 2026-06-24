@@ -21,8 +21,8 @@ export function Requests() {
   const { leaves, ot, cancelLeave, cancelOt, navigate, refreshData } = useApp();
   const [tab, setTab] = useState<"leave" | "ot">("leave");
   const [search, setSearch] = useState("");
-  const [filterMonth, setFilterMonth] = useState("All");
-  const [filterYear, setFilterYear] = useState("All");
+  const [filterMonth, setFilterMonth] = useState<string>(currentServerMonth());
+  const [filterYear, setFilterYear] = useState<string>(String(currentServerYear()));
   const [cancelTarget, setCancelTarget] = useState<{ kind: "leave" | "ot"; id: string } | null>(null);
   const [reason, setReason] = useState("");
 
@@ -118,7 +118,7 @@ export function Requests() {
                   <div className="flex items-start justify-between">
                     <div>
                       <p className="text-sm font-bold text-slate-800 dark:text-slate-100">{l.leaveType}</p>
-                      <p className="text-xs text-slate-400">{l.requestId} · {l.days} day(s)</p>
+                      <p className="text-xs text-slate-400">{l.days} day(s)</p>
                     </div>
                     <StatusBadge status={l.status} />
                   </div>
@@ -152,7 +152,7 @@ export function Requests() {
                 <div className="flex items-start justify-between">
                   <div>
                     <p className="text-sm font-bold text-slate-800 dark:text-slate-100">{o.otType}</p>
-                    <p className="text-xs text-slate-400">{o.requestId} · {o.typeCode} · {o.durationHours}h</p>
+                    <p className="text-xs text-slate-400">{o.typeCode} · {o.durationHours}h</p>
                   </div>
                   <StatusBadge status={o.status} />
                 </div>

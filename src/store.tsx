@@ -50,6 +50,7 @@ import { cancelShiftReminders } from "./lib/reminders";
 const SESSION_KEY = "primer_portal_session";
 const THEME_KEY = "primer_portal_theme";
 const NAV_BLUR_KEY = "primer_portal_nav_blur";
+const REDUCE_MOTION_KEY = "primer_portal_reduce_motion";
 
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -149,6 +150,8 @@ interface AppState {
   // appearance
   navBlur: boolean;
   setNavBlur: (v: boolean) => void;
+  reduceMotion: boolean;
+  setReduceMotion: (v: boolean) => void;
 
   // navigation
   screen: ScreenId;
@@ -251,6 +254,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setNavBlur = useCallback((v: boolean) => {
     localStorage.setItem(NAV_BLUR_KEY, String(v));
     setNavBlurState(v);
+  }, []);
+
+  // ---- appearance: reduce motion ----
+  const [reduceMotion, setReduceMotionState] = useState<boolean>(() => {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(REDUCE_MOTION_KEY) : null;
+    if (raw === null) {
+      if (typeof window !== "undefined" && window.matchMedia) {
+        return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      }
+      return false;
+    }
+    return raw === "true";
+  });
+  const setReduceMotion = useCallback((v: boolean) => {
+    try { localStorage.setItem(REDUCE_MOTION_KEY, String(v)); } catch { /* ignore */ }
+    setReduceMotionState(v);
   }, []);
 
   // ---- navigation ----
@@ -1047,6 +1066,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toggleDark,
       navBlur,
       setNavBlur,
+      reduceMotion,
+      setReduceMotion,
       screen,
       navigate,
       back,
@@ -1080,7 +1101,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       hasHydrated,
     }),
     [
-      session, signIn, signInWithEmployeeId, signOut, dark, themeMode, setThemeMode, toggleDark, navBlur, setNavBlur, screen, navigate, back, stack.length,
+      session, signIn, signInWithEmployeeId, signOut, dark, themeMode, setThemeMode, toggleDark, navBlur, setNavBlur, reduceMotion, setReduceMotion, screen, navigate, back, stack.length,
       profile, attendance, leaves, ot, coverage, infractions, holidays, notifications,
       clockIn, clockOut, clockBusy, updateNote, submitLeave, cancelLeave, submitOt, cancelOt,
       submitTechCoverage, takeoverCoverage, cancelCoverage, changeLeaveDate, updateProfile,
