@@ -475,6 +475,25 @@ interface FbNotificationRecord {
   timestamp?: number;
 }
 
+
+// ---------------------------------------------------------------------------
+// Random record id helper
+//
+// Generates a 10-char uppercase token (e.g. "SJOSBOGODR") used as the
+// Firebase key for newly created LeaveRequests / Attendance / CoverageList
+// records.  The same value is stored inside the record (requestId /
+// AttendanceID / CoverageID), so each record's key always matches its own
+// identity field.
+// ---------------------------------------------------------------------------
+const _ID_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+export function randomRecordId(len = 10): string {
+  let out = "";
+  for (let i = 0; i < len; i++) {
+    out += _ID_CHARS[Math.floor(Math.random() * _ID_CHARS.length)];
+  }
+  return out;
+}
+
 export class FirebaseRepository implements Repository {
   private db = getDb();
 
@@ -679,10 +698,16 @@ export class FirebaseRepository implements Repository {
   }
 
   async createLeave(request: LeaveRequest) {
-    for (const d of request.leaveDate) {
-      const key = this.leaveRecordId(request.requestId, d);
-      const fb = mapLeaveToFb({ ...request, leaveDate: [d] });
-      await set(ref(this.db, `LeaveRequests/${key}`), fb);
+    // Each stored record key MUST equal its own `requestId` field, so
+    // for multi-date leave requests we generate a fresh unique id per
+    // date and write that as both the Firebase key and the record's
+    // requestId.
+    const dates = request.leaveDate.length > 0 ? request.leaveDate : [""];
+    for (let i = 0; i < dates.length; i++) {
+      const d = dates[i];
+      const recId = i === 0 ? request.requestId : randomRecordId();
+      const fb = mapLeaveToFb({ ...request, requestId: recId, leaveDate: [d] });
+      await set(ref(this.db, `LeaveRequests/${recId}`), fb);
     }
   }
 
@@ -863,7 +888,14 @@ export class FirebaseRepository implements Repository {
 
 function mapUserToProfile(id: string, rec: FbUserRecord): Profile {
   const workSetup = asString(rec.workSetup ?? rec.Work_Setup);
-  const isFlextime = workSetup.toLowerCase() === "flextime" || asBoolean((rec as unknown as { isFlextime?: boolean }).isFlextime, false);
+  const statusStr = asString(rec.Status);
+  // A user is treated as Flextime when their Status (or legacy workSetup)
+  // field equals "Flextime" (case-insensitive), or when an explicit
+  // boolean flag has been set on the record.
+  const isFlextime =
+    statusStr.toLowerCase() === "flextime" ||
+    workSetup.toLowerCase() === "flextime" ||
+    asBoolean((rec as unknown as { isFlextime?: boolean }).isFlextime, false);
   return {
     id,
     employeeId: rec.Employee_ID_Number ?? rec.EmployeeId ?? id,
@@ -929,7 +961,7 @@ function mapAttendance(id: string, rec: FbAttendanceRecord): AttendanceRecord {
     dateOut: rec.date_out,
     timeOut: rec.time_out,
     totalHours: rec.total_hours !== undefined ? asNumber(rec.total_hours) : undefined,
-    note: asString(rec.Note),
+    note: asString(rec.Note).trim() ? asString(rec.Note) : "None",
     noteLocked: asBoolean(rec.note_locked),
     clockInTs: rec.clock_in_ts !== undefined ? asNumber(rec.clock_in_ts) : undefined,
     clockOutTs: rec.clock_out_ts !== undefined ? asNumber(rec.clock_out_ts) : undefined,
@@ -959,7 +991,7 @@ function mapAttendanceToFb(r: AttendanceRecord): Record<string, unknown> {
     Infraction: r.infraction ?? 0,
     isClockedIn: r.isClockedIn,
     Status: r.status,
-    Note: r.note ?? "",
+    Note: r.note && r.note.trim() ? r.note : "None",
     date_in: r.dateIn,
     time_in: r.timeIn,
     mins_late: r.minsLate ?? 0,
@@ -981,7 +1013,7 @@ function mapAttendancePatchToFb(r: Partial<AttendanceRecord>): Record<string, un
   const m: Record<string, unknown> = {};
   if (r.status !== undefined) m.Status = r.status;
   if (r.isClockedIn !== undefined) m.isClockedIn = r.isClockedIn;
-  if (r.note !== undefined) m.Note = r.note;
+  if (r.note !== undefined) m.Note = r.note && r.note.trim() ? r.note : "None";
   if (r.dateOut !== undefined) m.date_out = r.dateOut;
   if (r.timeOut !== undefined) m.time_out = r.timeOut;
   if (r.totalHours !== undefined) m.total_hours = r.totalHours;
@@ -1136,20 +1168,22 @@ function mapCoverage(id: string, rec: FbCoverageRecord): CoverageRequest {
 
 function mapCoverageToFb(c: CoverageRequest): Record<string, unknown> {
   // Firebase RTDB rejects any field whose value is `undefined`. Optional
-  // fields (CoveredbyID, TakenBy, CoveredHours) must be given a safe default
-  // when absent so that `set()` never receives undefined values.
+  // fields must be given a safe default when absent.
+  //
+  // Per the schema cleanup we NO LONGER write these redundant fields:
+  //   CoveragePosition, CoveredbyID, Full_Name, Reason, TakenBy,
+  //   requesterId, requesterName
+  // `Employee_ID_Number` already identifies the requester and `Position`
+  // already carries the position string.
   return {
     CoverageID: c.coverageId,
     CoverageDate: c.coverageDate,
     CoverageTime: c.coverageTime ?? "",
-    CoveragePosition: c.position ?? "",
     month: c.month ?? "",
     year: c.year ?? new Date().getFullYear(),
     CoverageType: c.coverageType ?? "",
     forCoverageHours: c.forCoverageHours ?? 0,
     CoverageStatus: c.coverageStatus ?? "Available",
-    CoveredbyID: c.coveredById ?? "",
-    TakenBy: c.takenBy ?? "",
     Days_Off: c.daysOff ?? "",
     Position: c.position ?? "",
     Employee_ID_Number: c.requesterId ?? "",
@@ -1157,10 +1191,6 @@ function mapCoverageToFb(c: CoverageRequest): Record<string, unknown> {
     Phone_Name: c.phoneName ?? "",
     Schedule: c.schedule ?? "",
     Team: c.team ?? "",
-    requesterId: c.requesterId ?? "",
-    Full_Name: c.requesterName ?? "",
-    requesterName: c.requesterName ?? "",
-    Reason: c.reason ?? "",
   };
 }
 

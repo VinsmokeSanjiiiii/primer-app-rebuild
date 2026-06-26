@@ -19,6 +19,7 @@ import type {
   ScreenId,
 } from "./types";
 import { newId } from "./data/seed";
+import { randomRecordId } from "./data/repository";
 import { getRepository } from "./data/repository";
 import {
   fmtDate,
@@ -380,16 +381,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 cv.coverageDate === leaveDate,
             );
             if (!alreadyExists) {
+              const _covId = randomRecordId();
               const cov: CoverageRequest = {
-                id: newId(),
-                coverageId: `CV-${Math.floor(Math.random() * 9000 + 1000)}`,
+                id: _covId,
+                coverageId: _covId,
                 employeeId: empId,
                 requesterId: empId,
                 requesterName: p.fullName,
                 phoneName: p.phoneName,
                 coverageDate: leaveDate,
                 coverageTime: p.schedule,
-                coverageType: "Leave",
+                coverageType: leave.leaveType,
                 coverageStatus: "Available",
                 forCoverageHours: 8,
                 daysOff: p.daysOff,
@@ -678,9 +680,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const now = serverNow();
       const nowMs = now.getTime();
+      const _attId = randomRecordId();
       const rec: AttendanceRecord = {
-        id: newId(),
-        attendanceCode: `ATT-${Math.floor(Math.random() * 9000 + 1000)}`,
+        id: _attId,
+        attendanceCode: _attId,
         employeeId: empId,
         dateIn: fmtDate(now),
         timeIn: fmtTime(now),
@@ -845,10 +848,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const autoApprove = lr.leaveType === "Vacation Leave";
       const status = autoApprove ? "Approved" : "Pending";
 
+      const _reqId = randomRecordId();
       const full: LeaveRequest = {
         ...lr,
-        id: newId(),
-        requestId: `LR-${Math.floor(Math.random() * 9000 + 1000)}`,
+        id: _reqId,
+        requestId: _reqId,
         createdAt: Date.now(),
         status,
       };
@@ -885,9 +889,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // Auto-approved VL → create a coverage slot so a teammate can fill in
         if (autoApprove && profile) {
           for (const d of full.leaveDate) {
-            const covId = `CV-${Math.floor(Math.random() * 9000 + 1000)}`;
+            const covId = randomRecordId();
             const cov: CoverageRequest = {
-              id: newId(),
+              id: covId,
               coverageId: covId,
               employeeId: profile.employeeId,
               requesterId: profile.employeeId,
@@ -895,7 +899,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               phoneName: profile.phoneName,
               coverageDate: d,
               coverageTime: profile.schedule,
-              coverageType: "Leave",
+              coverageType: lr.leaveType,
               coverageStatus: "Available",
               forCoverageHours: 8,
               daysOff: profile.daysOff,
@@ -967,11 +971,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const submitOt = useCallback<AppState["submitOt"]>(
     (o) => {
+      const _otId = randomRecordId();
       const full: OtRequest = {
         phoneName: profile?.phoneName,
         ...o,
-        id: newId(),
-        requestId: `OT-${Math.floor(Math.random() * 9000 + 1000)}`,
+        id: _otId,
+        requestId: _otId,
         createdAt: Date.now(),
       };
       setOt((prev) => [full, ...prev]);
@@ -998,10 +1003,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const submitTechCoverage = useCallback<AppState["submitTechCoverage"]>(
     (c) => {
+      const _covId = randomRecordId();
       const full: CoverageRequest = {
         ...c,
-        id: newId(),
-        coverageId: `CV-${Math.floor(Math.random() * 9000 + 1000)}`,
+        id: _covId,
+        coverageId: _covId,
         createdAt: Date.now(),
       };
       setCoverage((prev) => [full, ...prev]);
