@@ -15,6 +15,8 @@
 
 import { log } from "./log";
 
+const LIVE_UPDATES_MODULE_SPECIFIER = "@capacitor/live-updates";
+
 export type ProgressEvent =
   | { kind: "start" }
   | { kind: "progress"; percent: number }
@@ -24,10 +26,17 @@ export type ProgressEvent =
 
 export type ProgressListener = (e: ProgressEvent) => void;
 
+export interface LiveUpdatesModuleLike {
+  sync: (onProgress?: (percentage: number) => void) => Promise<{
+    activeApplicationPathChanged?: boolean;
+  }>;
+  reload: () => Promise<void>;
+}
+
 export interface RunUpdateOptions {
   onProgress?: ProgressListener;
   /** Test seam: inject a custom Live Updates module. */
-  liveUpdatesModule?: typeof import("@capacitor/live-updates");
+  liveUpdatesModule?: LiveUpdatesModuleLike;
 }
 
 function isNativeCap(): boolean {
@@ -38,6 +47,19 @@ function isNativeCap(): boolean {
     return cap?.isNativePlatform?.() === true;
   } catch {
     return false;
+  }
+}
+
+async function loadLiveUpdates() {
+  const moduleName = "@capacitor/live-updates";
+
+  try {
+    return await import(
+      /* @vite-ignore */
+      moduleName
+    );
+  } catch {
+    return null;
   }
 }
 
@@ -62,9 +84,9 @@ export async function runLiveUpdate(
     return { ok: false, applied: false, unsupported: true, error: "unsupported_platform" };
   }
 
-  let mod: typeof import("@capacitor/live-updates");
+  let mod: LiveUpdatesModuleLike;
   try {
-    mod = opts.liveUpdatesModule ?? (await import("@capacitor/live-updates"));
+    mod = opts.liveUpdatesModule ?? (await loadLiveUpdates());
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed to load Live Updates.";
     log.error("update", "import live-updates failed", e);
@@ -88,7 +110,6 @@ export async function runLiveUpdate(
     emit({ kind: "progress", percent: 90 });
 
     if (result?.activeApplicationPathChanged) {
-
       emit({ kind: "applied" });
       return { ok: true, applied: true };
     }
@@ -116,10 +137,9 @@ export async function reloadAfterUpdate(): Promise<void> {
     return;
   }
   try {
-    const mod = await import("@capacitor/live-updates");
+    const mod = await loadLiveUpdates();
     await mod.reload();
   } catch (e) {
-
     log.error("update", "reload failed", e);
     try {
       window.location.reload();

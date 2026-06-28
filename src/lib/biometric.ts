@@ -38,6 +38,13 @@ interface StoredCredential {
   // RSA key; we approximate with the WebAuthn credentialId.
 }
 
+type BiometricFailureCode =
+  | "unsupported"
+  | "not-enrolled"
+  | "canceled"
+  | "locked"
+  | "failed";
+
 function b64urlToBuffer(b64url: string): ArrayBuffer {
   const pad = "=".repeat((4 - (b64url.length % 4)) % 4);
   const b64 = (b64url + pad).replace(/-/g, "+").replace(/_/g, "/");
@@ -58,6 +65,30 @@ function newChallenge(): ArrayBuffer {
   const arr = new Uint8Array(32);
   crypto.getRandomValues(arr);
   return arr.buffer;
+}
+
+function isStoredCredential(value: unknown): value is StoredCredential {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.credentialId === "string" &&
+    v.credentialId.length > 0 &&
+    typeof v.employeeId === "string" &&
+    v.employeeId.length > 0 &&
+    typeof v.email === "string" &&
+    v.email.length > 0
+  );
+}
+
+function readStoredCredential(): StoredCredential | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    return isStoredCredential(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 export function isWebAuthnSupported(): boolean {
@@ -84,22 +115,11 @@ export async function isBiometricAvailable(): Promise<boolean> {
 }
 
 export function hasEnrolledBiometric(): boolean {
-  try {
-    return !!localStorage.getItem(STORAGE_KEY);
-  } catch {
-    return false;
-  }
+  return readStoredCredential() !== null;
 }
 
 export function getEnrolledEmployeeEmail(): string | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredCredential;
-    return parsed.email ?? null;
-  } catch {
-    return null;
-  }
+  return readStoredCredential()?.email ?? null;
 }
 
 export async function enrollBiometric(opts: {
@@ -155,18 +175,23 @@ export async function enrollBiometric(opts: {
 
 export async function verifyBiometric(): Promise<
   | { ok: true; employeeId: string; email: string }
-  | { ok: false; error: string }
+  | { ok: false; error: string; code: BiometricFailureCode }
 > {
   if (!isWebAuthnSupported()) {
-    return { ok: false, error: "Biometric authentication is not supported on this device." };
+    return {
+      ok: false,
+      error: "Biometric authentication is not supported on this device.",
+      code: "unsupported",
+    };
   }
-  let stored: StoredCredential;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ok: false, error: "No biometric credential is enrolled on this device." };
-    stored = JSON.parse(raw) as StoredCredential;
-  } catch {
-    return { ok: false, error: "Stored biometric credential is corrupt." };
+
+  const stored = readStoredCredential();
+  if (!stored) {
+    return {
+      ok: false,
+      error: "No biometric credential is enrolled on this device.",
+      code: "not-enrolled",
+    };
   }
 
   try {
@@ -185,14 +210,19 @@ export async function verifyBiometric(): Promise<
         rpId: window.location.hostname,
       },
     });
-    if (!assertion) return { ok: false, error: "Biometric verification was cancelled." };
+    if (!assertion) {
+      return { ok: false, error: "Biometric verification was cancelled.", code: "canceled" };
+    }
     return { ok: true, employeeId: stored.employeeId, email: stored.email };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Biometric verification failed.";
     if (/NotAllowedError|cancelled|aborted/i.test(msg)) {
-      return { ok: false, error: "Biometric prompt was cancelled." };
+      return { ok: false, error: "Biometric prompt was cancelled.", code: "canceled" };
     }
-    return { ok: false, error: msg };
+    if (/lock|too many|timeout/i.test(msg.toLowerCase())) {
+      return { ok: false, error: msg, code: "locked" };
+    }
+    return { ok: false, error: msg, code: "failed" };
   }
 }
 

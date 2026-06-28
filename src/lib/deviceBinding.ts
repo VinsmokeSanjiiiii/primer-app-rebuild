@@ -12,7 +12,9 @@
 import { get, ref, remove, set, serverTimestamp } from "firebase/database";
 import { getDb } from "../data/firebase";
 
-const DEVICE_ID_KEY = "pulse.deviceId.v1";
+const DEVICE_ID_KEY = "primer_device_binding_id_v1";
+
+let cachedDeviceId: string | null = null;
 
 function uuid(): string {
   try {
@@ -34,17 +36,66 @@ function uuid(): string {
   return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
 }
 
-export function getDeviceId(): string {
+function readPersistedDeviceId(): string | null {
   try {
     const existing = localStorage.getItem(DEVICE_ID_KEY);
-    if (existing) return existing;
-    const id = uuid();
-    localStorage.setItem(DEVICE_ID_KEY, id);
-    return id;
+    if (existing && existing.trim()) return existing.trim();
+
+    // Legacy key kept for installs created before the rename.
+    const legacy = localStorage.getItem("pulse.deviceId.v1");
+    if (legacy && legacy.trim()) {
+      const id = legacy.trim();
+      persistDeviceId(id);
+      return id;
+    }
+    return null;
   } catch {
-    // Storage unavailable — fall back to an ephemeral id.
-    return uuid();
+    return null;
   }
+}
+
+function persistDeviceId(id: string): void {
+  try {
+    localStorage.setItem(DEVICE_ID_KEY, id);
+  } catch {
+    /* ignore */
+  }
+}
+
+function ensureDeviceId(): string {
+  if (cachedDeviceId) return cachedDeviceId;
+  const persisted = readPersistedDeviceId();
+  if (persisted) {
+    cachedDeviceId = persisted;
+    return persisted;
+  }
+  const id = uuid();
+  cachedDeviceId = id;
+  persistDeviceId(id);
+  return id;
+}
+
+export function getDeviceId(): string {
+  return ensureDeviceId();
+}
+
+export async function getOrCreateBindingId(): Promise<string> {
+  return ensureDeviceId();
+}
+
+export function getCachedBindingId(): string | null {
+  return cachedDeviceId;
+}
+
+export function __resetBindingCacheForTests(): void {
+  cachedDeviceId = null;
+}
+
+export function bindingMatches(
+  expected: string | null | undefined,
+  actual: string | null | undefined,
+): boolean {
+  return !!expected && !!actual && expected === actual;
 }
 
 export interface DeviceBindingRecord {
