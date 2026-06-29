@@ -1,14 +1,23 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { useApp } from "../store";
 import { AppBar } from "../components/AppBar";
 import { Card, Button, Badge, EmptyState, Dialog } from "../components/ui";
 import { Icon } from "../components/Icon";
 import { DateFilter } from "../components/DateFilter";
 import { StatusBadge } from "./Dashboard";
-import { serverNow, parseDate, fmtDate, startOfDay, currentServerMonth, currentServerYear } from "../lib/date";
+import {
+  serverNow,
+  serverNowMs,
+  parseDate,
+  fmtDate,
+  startOfDay,
+  currentServerMonth,
+  currentServerYear,
+} from "../lib/date";
 import type { CoverageRequest } from "../types";
 
 const ITEMS_PER_PAGE = 10;
+const MIN_COVERAGE_SECS = 3600; // 1 hour minimum before Finish is enabled
 
 function buildYears(): string[] {
   const curr = currentServerYear();
@@ -32,46 +41,56 @@ function rankOf(pos: string): number {
   for (const [key, rank] of Object.entries(POSITION_RANK)) {
     if (lower.includes(key)) return rank;
   }
-  return 99; // unknown
+  return 99;
 }
 
-/**
- * Grab eligibility rules:
- *  Supervisor (0)       → can grab all (rank 0–4)
- *  Inbound (1)          → can grab Inbound + Lima Delta Expert + Delta Expert + Tango (rank 1–4)
- *  Lima Delta Expert(2) → can grab Lima Delta Expert + Delta Expert + Tango (rank 2–4)
- *  Delta Expert (3)     → can grab Delta Expert + Tango (rank 3–4)
- *  Tango (4)            → can grab Tango only (rank 4)
- */
 function canGrabCoverage(profilePosition: string, recordPosition: string): boolean {
   const myRank = rankOf(profilePosition);
   const recRank = rankOf(recordPosition);
-  // Supervisor grabs all
   if (myRank === 0) return true;
-  // Others can only grab records at their own rank or lower (higher number = lower position)
   return recRank >= myRank;
 }
 
-/** Sort score for Available tab: 0 = grabbable, 1 = past, 2 = ungrabbable/own */
 function grabSortScore(
   c: CoverageRequest,
   profileEmployeeId: string,
   profilePosition: string,
   today: Date,
+  grabbedIds: Set<string | undefined>,
 ): number {
   const isOwn = c.requesterId === profileEmployeeId;
   const isPast = parseDate(c.coverageDate) < today;
   const eligible = canGrabCoverage(profilePosition, c.position ?? "");
+  const alreadyGrabbed = grabbedIds.has(c.id);
 
-  if (!isOwn && !isPast && eligible) return 0; // grabbable
-  if (isPast) return 1;                         // past date
-  return 2;                                     // ungrabbable (own or ineligible)
+  if (!isOwn && !isPast && eligible && !alreadyGrabbed) return 0;
+  if (isPast) return 1;
+  return 2;
+}
+
+/** Format elapsed seconds as HH:MM:SS */
+function fmtElapsed(secs: number): string {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  return [h, m, s].map((v) => String(v).padStart(2, "0")).join(":");
+}
+
+/** Compute elapsed seconds from a start timestamp to now (server-synced). */
+function elapsedSecs(startTs: number, nowMs: number): number {
+  return Math.max(0, Math.floor((nowMs - startTs) / 1000));
 }
 
 type Tab = "available" | "ongoing" | "completed";
 
+type ConfirmState =
+  | { kind: "take"; req: CoverageRequest }
+  | { kind: "cancel"; req: CoverageRequest }
+  | { kind: "finish"; req: CoverageRequest; coveredSecs: number };
+
 export function Coverage() {
-  const { coverage, coveredby, profile, takeoverCoverage, cancelCoverage } = useApp();
+  const { coverage, coveredby, profile, takeoverCoverage, cancelCoverage, finishCoverage } =
+    useApp();
 
   const FILTER_YEARS = useMemo(() => buildYears(), []);
 
@@ -81,11 +100,32 @@ export function Coverage() {
   const [completedMonth, setCompletedMonth] = useState(() => currentServerMonth());
   const [completedYear, setCompletedYear] = useState(() => String(currentServerYear()));
   const [page, setPage] = useState(0);
-  const [confirm, setConfirm] = useState<{ kind: "take" | "cancel"; req: CoverageRequest } | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+
+  // ── Real-time clock tick ───────────────────────────────────────────────────
+  // We tick every second only while there are Ongoing records to avoid
+  // unnecessary re-renders when the user is on other tabs.
+  const [nowMs, setNowMs] = useState(() => serverNowMs());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(serverNowMs()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const today = startOfDay(serverNow());
 
-  // ── Available (from CoverageList only, deduplicated, sorted) ──────────────
+  // ── Set of coverage IDs already grabbed (Ongoing) by current user ─────────
+  const myGrabbedOrigIds = useMemo<Set<string | undefined>>(() => {
+    return new Set(
+      coveredby
+        .filter(
+          (c) =>
+            c.coveredById === profile.employeeId && c.coverageStatus === "Ongoing",
+        )
+        .map((c) => c.originalCoverageId),
+    );
+  }, [coveredby, profile.employeeId]);
+
+  // ── Available (from CoverageList — hide records the current user already grabbed) ──
   const availableAll = useMemo(() => {
     const seen = new Set<string>();
     const filtered = coverage.filter((c) => {
@@ -94,17 +134,18 @@ export function Coverage() {
       const byStatus = c.coverageStatus === "Available";
       const byMonth = month === "All" || c.month === month;
       const byYear = year === "All" || String(c.year) === year;
-      return byStatus && byMonth && byYear;
+      // Hide records this user has already grabbed
+      const notYetGrabbed = !myGrabbedOrigIds.has(c.id);
+      return byStatus && byMonth && byYear && notYetGrabbed;
     });
 
-    // Sort: grabbable (ascending) → past (ascending) → ungrabbable (ascending)
     return filtered.sort((a, b) => {
-      const sa = grabSortScore(a, profile.employeeId, profile.position ?? "", today);
-      const sb = grabSortScore(b, profile.employeeId, profile.position ?? "", today);
+      const sa = grabSortScore(a, profile.employeeId, profile.position ?? "", today, myGrabbedOrigIds);
+      const sb = grabSortScore(b, profile.employeeId, profile.position ?? "", today, myGrabbedOrigIds);
       if (sa !== sb) return sa - sb;
       return parseDate(a.coverageDate).getTime() - parseDate(b.coverageDate).getTime();
     });
-  }, [coverage, month, year, profile.employeeId, profile.position, today]);
+  }, [coverage, month, year, profile.employeeId, profile.position, today, myGrabbedOrigIds]);
 
   const availablePage = useMemo(() => {
     const start = page * ITEMS_PER_PAGE;
@@ -113,7 +154,7 @@ export function Coverage() {
 
   const totalPages = Math.max(1, Math.ceil(availableAll.length / ITEMS_PER_PAGE));
 
-  // ── Ongoing (from Coveredby node — current user's records) ────────────────
+  // ── Ongoing (Coveredby records for this user) ─────────────────────────────
   const ongoingList = useMemo(() => {
     return coveredby.filter((c) => {
       const byUser = c.coveredById === profile.employeeId;
@@ -124,7 +165,7 @@ export function Coverage() {
     });
   }, [coveredby, profile.employeeId, month, year]);
 
-  // ── Completed (from Coveredby node — current user's records only) ─────────
+  // ── Completed (Coveredby records for this user) ───────────────────────────
   const completedList = useMemo(() => {
     return coveredby
       .filter((c) => {
@@ -135,22 +176,41 @@ export function Coverage() {
         return byUser && byStatus && byMonth && byYear;
       })
       .sort(
-        (a, b) =>
-          parseDate(a.coverageDate).getTime() - parseDate(b.coverageDate).getTime(),
+        (a, b) => parseDate(a.coverageDate).getTime() - parseDate(b.coverageDate).getTime(),
       );
   }, [coveredby, profile.employeeId, completedMonth, completedYear]);
 
-  const handleMonthChange = (v: string) => { setMonth(v); setPage(0); };
-  const handleYearChange = (v: string) => { setYear(v); setPage(0); };
+  const handleMonthChange = (v: string) => {
+    setMonth(v);
+    setPage(0);
+  };
+  const handleYearChange = (v: string) => {
+    setYear(v);
+    setPage(0);
+  };
 
-  const renderCard = (c: CoverageRequest) => {
+  const handleConfirm = useCallback(() => {
+    if (!confirm) return;
+    if (confirm.kind === "take") {
+      takeoverCoverage(confirm.req.id);
+    } else if (confirm.kind === "cancel") {
+      cancelCoverage(confirm.req.id);
+    } else if (confirm.kind === "finish") {
+      const hrs = Math.max(1, Math.round((confirm.coveredSecs / 3600) * 10) / 10);
+      finishCoverage(confirm.req.id, hrs);
+    }
+    setConfirm(null);
+  }, [confirm, takeoverCoverage, cancelCoverage, finishCoverage]);
+
+  // ── Available card ─────────────────────────────────────────────────────────
+  const renderAvailableCard = (c: CoverageRequest) => {
     const isOwn = c.requesterId === profile.employeeId;
-    const isMine = c.coveredById === profile.employeeId;
     const isPastDate = parseDate(c.coverageDate) < today;
     const canGrab = canGrabCoverage(profile.position ?? "", c.position ?? "");
+    const grabbable = !isOwn && !isPastDate && canGrab;
 
     return (
-      <Card key={c.id} className={isPastDate && tab !== "completed" ? "opacity-60" : ""}>
+      <Card key={c.id} className={isPastDate ? "opacity-60" : ""}>
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300">
@@ -158,7 +218,7 @@ export function Coverage() {
                 name={
                   c.coverageType === "Tech Issue"
                     ? "wrench"
-                    : c.coverageType === "Leave"
+                    : c.coverageType?.toLowerCase().includes("leave")
                     ? "umbrella"
                     : "bolt"
                 }
@@ -166,7 +226,9 @@ export function Coverage() {
               />
             </div>
             <div>
-              <p className="text-sm font-bold text-slate-800 dark:text-slate-100">{c.requesterName}</p>
+              <p className="text-sm font-bold text-slate-800 dark:text-slate-100">
+                {c.requesterName}
+              </p>
               <p className="text-xs text-slate-400">{c.position}</p>
             </div>
           </div>
@@ -174,62 +236,196 @@ export function Coverage() {
         </div>
 
         <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-          <Meta
-            label="Date"
-            value={tab === "completed" ? fmtDate(parseDate(c.coverageDate)) : c.coverageDate}
-            isPast={isPastDate && tab !== "completed"}
-          />
+          <Meta label="Date" value={c.coverageDate} isPast={isPastDate} />
           <Meta label="Time" value={c.coverageTime} />
-          <Meta label="Hours" value={`${c.forCoverageHours}h`} />
+          <Meta label="Hours Needed" value={`${c.forCoverageHours}h`} />
         </div>
 
-        <p className="mt-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-500 dark:bg-white/5 dark:text-slate-300">
-          {c.reason}
-        </p>
+        <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+          <Meta label="Team" value={c.team} />
+          <Meta label="Days Off" value={c.daysOff} />
+        </div>
+
+        {c.reason ? (
+          <p className="mt-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-500 dark:bg-white/5 dark:text-slate-300">
+            {c.reason}
+          </p>
+        ) : null}
 
         <div className="mt-1.5 flex flex-wrap items-center gap-2">
           <Badge>{c.coverageType}</Badge>
-          {c.takenBy && <Badge tone="sky">Taken by {c.takenBy}</Badge>}
-          {isPastDate && tab !== "completed" && <Badge tone="slate">Past</Badge>}
-          {isOwn && tab === "available" && <Badge tone="amber">Your request</Badge>}
-          {isMine && tab === "completed" && <Badge tone="green">You covered</Badge>}
+          {isPastDate && <Badge tone="slate">Past</Badge>}
+          {isOwn && <Badge tone="amber">Your request</Badge>}
         </div>
 
-        {/* Actions */}
-        {tab === "available" && (
-          <div className="mt-3">
-            {isOwn ? (
-              <span className="flex w-full items-center justify-center rounded-xl bg-slate-100 py-2 text-xs font-semibold text-slate-400 dark:bg-white/5">
-                Your own request
-              </span>
-            ) : !canGrab ? (
-              <div className="flex w-full flex-col items-center gap-1 rounded-xl bg-slate-100 py-2 dark:bg-white/5">
-                <span className="text-xs font-semibold text-slate-400">Invalid Specialization</span>
-                {isPastDate && (
-                  <span className="text-xs font-semibold text-slate-400">· Past date</span>
-                )}
-              </div>
-            ) : isPastDate ? (
-              <span className="flex w-full items-center justify-center rounded-xl bg-slate-100 py-2 text-xs font-semibold text-slate-400 dark:bg-white/5">
-                Past date
-              </span>
-            ) : (
-              <Button full variant="tonal" icon="swap" onClick={() => setConfirm({ kind: "take", req: c })}>
-                Grab
-              </Button>
-            )}
-          </div>
-        )}
-
-        {tab === "ongoing" && isMine && (
-          <Button full variant="secondary" icon="x" className="mt-3"
-            onClick={() => setConfirm({ kind: "cancel", req: c })}>
-            Cancel coverage
-          </Button>
-        )}
+        <div className="mt-3">
+          {isOwn ? (
+            <span className="flex w-full items-center justify-center rounded-xl bg-slate-100 py-2 text-xs font-semibold text-slate-400 dark:bg-white/5">
+              Your own request
+            </span>
+          ) : !canGrab ? (
+            <span className="flex w-full items-center justify-center rounded-xl bg-slate-100 py-2 text-xs font-semibold text-slate-400 dark:bg-white/5">
+              Invalid specialization
+            </span>
+          ) : isPastDate ? (
+            <span className="flex w-full items-center justify-center rounded-xl bg-slate-100 py-2 text-xs font-semibold text-slate-400 dark:bg-white/5">
+              Past date
+            </span>
+          ) : (
+            <Button
+              full
+              variant="tonal"
+              icon="swap"
+              onClick={() => setConfirm({ kind: "take", req: c })}
+            >
+              Grab Coverage
+            </Button>
+          )}
+        </div>
       </Card>
     );
   };
+
+  // ── Ongoing card ──────────────────────────────────────────────────────────
+  const renderOngoingCard = (c: CoverageRequest) => {
+    const secs = c.coverageStartTs ? elapsedSecs(c.coverageStartTs, nowMs) : 0;
+    const progressPct = Math.min(100, (secs / MIN_COVERAGE_SECS) * 100);
+    const canFinish = secs >= MIN_COVERAGE_SECS;
+    const minsRemaining = Math.max(0, Math.ceil((MIN_COVERAGE_SECS - secs) / 60));
+
+    return (
+      <Card key={c.id}>
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300">
+              <Icon name="clock" size={16} />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-slate-800 dark:text-slate-100">
+                Coverage in Progress
+              </p>
+              <p className="text-xs text-slate-400">{c.coverageDate} · {c.coverageTime}</p>
+            </div>
+          </div>
+          <StatusBadge status={c.coverageStatus} />
+        </div>
+
+        {/* Real-time elapsed timer */}
+        <div className="mt-3 flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 dark:bg-white/5">
+          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+            Coverage time
+          </span>
+          <span className="font-mono text-lg font-bold text-indigo-600 dark:text-indigo-400">
+            {fmtElapsed(secs)}
+          </span>
+        </div>
+
+        {/* Progress bar toward 1-hour minimum */}
+        <div className="mt-2 space-y-1">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-slate-500 dark:text-slate-400">
+              Progress to minimum (1 hour)
+            </span>
+            <span
+              className={`font-semibold ${
+                canFinish ? "text-emerald-600 dark:text-emerald-400" : "text-slate-500"
+              }`}
+            >
+              {canFinish ? "Ready to finish!" : `${minsRemaining} min remaining`}
+            </span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10">
+            <div
+              className={`h-full rounded-full transition-all duration-1000 ${
+                canFinish ? "bg-emerald-500" : "bg-indigo-500"
+              }`}
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+        </div>
+
+        <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+          <Meta label="Coverage Type" value={c.coverageType} />
+          <Meta label="Hours Needed" value={`${c.forCoverageHours}h`} />
+          <Meta label="Team" value={c.team} />
+        </div>
+
+        <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+          <Meta label="Schedule" value={c.coverageTime} />
+          <Meta label="Days Off" value={c.daysOff} />
+        </div>
+
+        {/* Cancel + Finish buttons */}
+        <div className="mt-3 flex gap-2">
+          <Button
+            full
+            variant="secondary"
+            icon="x"
+            onClick={() => setConfirm({ kind: "cancel", req: c })}
+          >
+            Cancel
+          </Button>
+
+          <div className="relative flex-1 group">
+            <Button
+              full
+              variant={canFinish ? "primary" : "secondary"}
+              icon="check"
+              disabled={!canFinish}
+              onClick={() => {
+                if (!canFinish) return;
+                setConfirm({ kind: "finish", req: c, coveredSecs: secs });
+              }}
+            >
+              Finish
+            </Button>
+            {!canFinish && (
+              <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 w-52 -translate-x-1/2 rounded-lg bg-slate-800 px-3 py-2 text-center text-xs text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 dark:bg-slate-700">
+                Finish unlocks after 1 hour of coverage. {minsRemaining} min left.
+                <div className="absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-4 border-transparent border-t-slate-800 dark:border-t-slate-700" />
+              </div>
+            )}
+          </div>
+        </div>
+      </Card>
+    );
+  };
+
+  // ── Completed card ────────────────────────────────────────────────────────
+  const renderCompletedCard = (c: CoverageRequest) => (
+    <Card key={c.id}>
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-2">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300">
+            <Icon name="shield" size={16} />
+          </div>
+          <div>
+            <p className="text-sm font-bold text-slate-800 dark:text-slate-100">
+              Completed Coverage
+            </p>
+            <p className="text-xs text-slate-400">{fmtDate(parseDate(c.coverageDate))}</p>
+          </div>
+        </div>
+        <StatusBadge status={c.coverageStatus} />
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+        <Meta label="Date" value={fmtDate(parseDate(c.coverageDate))} />
+        <Meta label="Time" value={c.coverageTime} />
+        <Meta label="Hours Covered" value={`${c.coveredHours ?? 0}h`} />
+      </div>
+
+      <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+        <Meta label="Team" value={c.team} />
+        <Meta label="Days Off" value={c.daysOff} />
+      </div>
+
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <Badge>{c.coverageType}</Badge>
+        <Badge tone="green">You covered</Badge>
+      </div>
+    </Card>
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -257,7 +453,7 @@ export function Coverage() {
           ))}
         </div>
 
-        {/* Month/Year filter — Available and Ongoing tabs */}
+        {/* Filters */}
         {tab !== "completed" && (
           <DateFilter
             month={month}
@@ -272,8 +468,6 @@ export function Coverage() {
             }}
           />
         )}
-
-        {/* Month/Year filter — Completed tab */}
         {tab === "completed" && (
           <DateFilter
             month={completedMonth}
@@ -288,14 +482,18 @@ export function Coverage() {
           />
         )}
 
-        {/* Content */}
+        {/* Tab content */}
         {tab === "available" && (
           <>
             {availableAll.length === 0 ? (
-              <EmptyState icon="swap" title="No available coverage" subtitle="No requests for the selected period." />
+              <EmptyState
+                icon="swap"
+                title="No available coverage"
+                subtitle="No requests found for the selected period."
+              />
             ) : (
               <>
-                <div className="space-y-2">{availablePage.map(renderCard)}</div>
+                <div className="space-y-2">{availablePage.map(renderAvailableCard)}</div>
                 {totalPages > 1 && (
                   <div className="flex items-center justify-between pt-1">
                     <Button
@@ -322,59 +520,173 @@ export function Coverage() {
           </>
         )}
 
-        {tab === "ongoing" && (
-          ongoingList.length === 0 ? (
-            <EmptyState icon="swap" title="No ongoing coverage" subtitle="No records assigned to you for the selected period." />
+        {tab === "ongoing" &&
+          (ongoingList.length === 0 ? (
+            <EmptyState
+              icon="clock"
+              title="No ongoing coverage"
+              subtitle="Grab a coverage from the Available tab to get started."
+            />
           ) : (
-            <div className="space-y-2">{ongoingList.map(renderCard)}</div>
-          )
-        )}
+            <div className="space-y-3">{ongoingList.map(renderOngoingCard)}</div>
+          ))}
 
-        {tab === "completed" && (
-          completedList.length === 0 ? (
-            <EmptyState icon="shield" title="No completed coverage" subtitle="No completed records found for the selected period." />
+        {tab === "completed" &&
+          (completedList.length === 0 ? (
+            <EmptyState
+              icon="shield"
+              title="No completed coverage"
+              subtitle="No completed records found for the selected period."
+            />
           ) : (
-            <div className="space-y-2">{completedList.map(renderCard)}</div>
-          )
-        )}
+            <div className="space-y-2">{completedList.map(renderCompletedCard)}</div>
+          ))}
       </div>
 
+      {/* ── Grab confirmation dialog ──────────────────────────────────────── */}
       <Dialog
-        open={!!confirm}
+        open={confirm?.kind === "take"}
         onClose={() => setConfirm(null)}
-        title={confirm?.kind === "take" ? "Take over coverage" : "Cancel coverage"}
+        title="Grab Coverage"
         footer={
           <>
-            <Button variant="secondary" full onClick={() => setConfirm(null)}>Back</Button>
-            <Button
-              full
-              variant={confirm?.kind === "cancel" ? "danger" : "primary"}
-              onClick={() => {
-                if (!confirm) return;
-                if (confirm.kind === "take") takeoverCoverage(confirm.req.id);
-                else cancelCoverage(confirm.req.id);
-                setConfirm(null);
-              }}
-            >
-              Confirm
+            <Button variant="secondary" full onClick={() => setConfirm(null)}>
+              Back
+            </Button>
+            <Button full variant="primary" onClick={handleConfirm}>
+              Confirm Grab
             </Button>
           </>
         }
       >
-        {confirm?.kind === "take" ? (
-          <p>
-            Take over <b>{confirm.req.requesterName}</b>'s coverage on {confirm.req.coverageDate}{" "}
-            ({confirm.req.forCoverageHours}h)? Status will change to <b>Ongoing</b>.
-          </p>
-        ) : (
-          <p>Cancel this ongoing coverage? It will return to <b>Available</b> and clear takeover data.</p>
+        {confirm?.kind === "take" && (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              You're about to take over this coverage. Please review the details below before
+              confirming.
+            </p>
+            <div className="rounded-xl border border-slate-200 dark:border-white/10 divide-y divide-slate-100 dark:divide-white/10 overflow-hidden">
+              <DetailRow label="Employee" value={confirm.req.requesterName} />
+              <DetailRow label="Position" value={confirm.req.position} />
+              <DetailRow label="Team" value={confirm.req.team} />
+              <DetailRow label="Coverage Date" value={confirm.req.coverageDate} />
+              <DetailRow label="Coverage Time" value={confirm.req.coverageTime} />
+              <DetailRow label="Coverage Type" value={confirm.req.coverageType} />
+              <DetailRow label="Hours Required" value={`${confirm.req.forCoverageHours} hour(s)`} highlight />
+              <DetailRow label="Days Off" value={confirm.req.daysOff} />
+              {confirm.req.reason ? (
+                <DetailRow label="Reason" value={confirm.req.reason} />
+              ) : null}
+            </div>
+            <p className="rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300">
+              Once confirmed, this coverage will appear on your <strong>Ongoing</strong> tab and
+              your coverage time will start immediately.
+            </p>
+          </div>
+        )}
+      </Dialog>
+
+      {/* ── Cancel confirmation dialog ────────────────────────────────────── */}
+      <Dialog
+        open={confirm?.kind === "cancel"}
+        onClose={() => setConfirm(null)}
+        title="Cancel Coverage"
+        footer={
+          <>
+            <Button variant="secondary" full onClick={() => setConfirm(null)}>
+              Back
+            </Button>
+            <Button full variant="danger" onClick={handleConfirm}>
+              Cancel Coverage
+            </Button>
+          </>
+        }
+      >
+        {confirm?.kind === "cancel" && (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              Are you sure you want to cancel this ongoing coverage? This action cannot be
+              undone.
+            </p>
+            <div className="rounded-xl border border-slate-200 dark:border-white/10 divide-y divide-slate-100 dark:divide-white/10 overflow-hidden">
+              <DetailRow label="Coverage Date" value={confirm.req.coverageDate} />
+              <DetailRow label="Coverage Time" value={confirm.req.coverageTime} />
+              <DetailRow label="Coverage Type" value={confirm.req.coverageType} />
+              <DetailRow
+                label="Time Elapsed"
+                value={
+                  confirm.req.coverageStartTs
+                    ? fmtElapsed(elapsedSecs(confirm.req.coverageStartTs, nowMs))
+                    : "—"
+                }
+              />
+            </div>
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
+              Cancelling will remove this record from your Ongoing tab. The original request
+              will remain Available for others to grab.
+            </p>
+          </div>
+        )}
+      </Dialog>
+
+      {/* ── Finish confirmation dialog ────────────────────────────────────── */}
+      <Dialog
+        open={confirm?.kind === "finish"}
+        onClose={() => setConfirm(null)}
+        title="Finish Coverage"
+        footer={
+          <>
+            <Button variant="secondary" full onClick={() => setConfirm(null)}>
+              Back
+            </Button>
+            <Button full variant="primary" onClick={handleConfirm}>
+              Confirm Finish
+            </Button>
+          </>
+        }
+      >
+        {confirm?.kind === "finish" && (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              Great work! Please review your coverage summary before finishing.
+            </p>
+            <div className="rounded-xl border border-slate-200 dark:border-white/10 divide-y divide-slate-100 dark:divide-white/10 overflow-hidden">
+              <DetailRow label="Coverage Date" value={confirm.req.coverageDate} />
+              <DetailRow label="Coverage Time" value={confirm.req.coverageTime} />
+              <DetailRow label="Coverage Type" value={confirm.req.coverageType} />
+              <DetailRow label="Team" value={confirm.req.team} />
+              <DetailRow label="Position" value={confirm.req.position} />
+              <DetailRow
+                label="Total Time Covered"
+                value={fmtElapsed(confirm.coveredSecs)}
+                highlight
+              />
+              <DetailRow
+                label="Hours to Log"
+                value={`${Math.max(1, Math.round((confirm.coveredSecs / 3600) * 10) / 10)} hr(s)`}
+                highlight
+              />
+            </div>
+            <p className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
+              After finishing, this record will move to your <strong>Completed</strong> tab and
+              the original coverage request will be updated accordingly.
+            </p>
+          </div>
         )}
       </Dialog>
     </div>
   );
 }
 
-function Meta({ label, value, isPast }: { label: string; value: string; isPast?: boolean }) {
+function Meta({
+  label,
+  value,
+  isPast,
+}: {
+  label: string;
+  value: string;
+  isPast?: boolean;
+}) {
   return (
     <div
       className={`rounded-lg border px-2 py-1.5 dark:border-white/10 ${
@@ -382,7 +694,38 @@ function Meta({ label, value, isPast }: { label: string; value: string; isPast?:
       }`}
     >
       <p className="text-[10px] uppercase text-slate-400">{label}</p>
-      <p className={`font-semibold ${isPast ? "text-slate-400" : "text-slate-700 dark:text-slate-200"}`}>{value}</p>
+      <p
+        className={`font-semibold truncate ${
+          isPast ? "text-slate-400" : "text-slate-700 dark:text-slate-200"
+        }`}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function DetailRow({
+  label,
+  value,
+  highlight,
+}: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between px-3 py-2">
+      <span className="text-xs text-slate-500 dark:text-slate-400">{label}</span>
+      <span
+        className={`text-xs font-semibold ${
+          highlight
+            ? "text-indigo-700 dark:text-indigo-300"
+            : "text-slate-700 dark:text-slate-200"
+        }`}
+      >
+        {value}
+      </span>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useApp } from "../store";
 import { AppBar } from "../components/AppBar";
 import { Card, Button, Badge, EmptyState, Dialog, TextArea, TextField } from "../components/ui";
@@ -9,12 +9,53 @@ import { parseDate, startOfDay, serverNow, currentServerMonth, currentServerYear
 import { DateFilter } from "../components/DateFilter";
 import type { LeaveRequest, OtRequest } from "../types";
 
+const PAGE_SIZE = 10;
+
 function buildYears(): string[] {
   const curr = currentServerYear();
   const base = [2024, 2025, 2026];
   if (!base.includes(curr)) base.push(curr);
   base.sort((a, b) => a - b);
   return base.map(String);
+}
+
+function Paginator({
+  page,
+  totalPages,
+  totalItems,
+  pageSize,
+  onChange,
+}: {
+  page: number;
+  totalPages: number;
+  totalItems: number;
+  pageSize: number;
+  onChange: (p: number) => void;
+}) {
+  if (totalPages <= 1) return null;
+  const from = (page - 1) * pageSize + 1;
+  const to = Math.min(page * pageSize, totalItems);
+  return (
+    <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-2.5 dark:border-white/10 dark:bg-white/5">
+      <button
+        disabled={page === 1}
+        onClick={() => onChange(page - 1)}
+        className="flex items-center gap-1 text-xs font-semibold text-indigo-600 disabled:cursor-not-allowed disabled:text-slate-300 dark:text-indigo-400 dark:disabled:text-slate-600"
+      >
+        ‹ Prev
+      </button>
+      <span className="text-xs text-slate-500 dark:text-slate-400">
+        {from}–{to} of {totalItems}
+      </span>
+      <button
+        disabled={page === totalPages}
+        onClick={() => onChange(page + 1)}
+        className="flex items-center gap-1 text-xs font-semibold text-indigo-600 disabled:cursor-not-allowed disabled:text-slate-300 dark:text-indigo-400 dark:disabled:text-slate-600"
+      >
+        Next ›
+      </button>
+    </div>
+  );
 }
 
 export function Requests() {
@@ -25,6 +66,8 @@ export function Requests() {
   const [filterYear, setFilterYear] = useState<string>(String(currentServerYear()));
   const [cancelTarget, setCancelTarget] = useState<{ kind: "leave" | "ot"; id: string } | null>(null);
   const [reason, setReason] = useState("");
+  const [leavePage, setLeavePage] = useState(1);
+  const [otPage, setOtPage] = useState(1);
 
   const FILTER_YEARS = useMemo(() => buildYears(), []);
 
@@ -57,6 +100,15 @@ export function Requests() {
         .sort((a, b) => b.createdAt - a.createdAt),
     [ot, search, filterMonth, filterYear],
   );
+
+  // Reset pages when the underlying filtered list changes
+  useEffect(() => { setLeavePage(1); }, [leaveList]);
+  useEffect(() => { setOtPage(1); }, [otList]);
+
+  const leaveTotalPages = Math.max(1, Math.ceil(leaveList.length / PAGE_SIZE));
+  const otTotalPages = Math.max(1, Math.ceil(otList.length / PAGE_SIZE));
+  const paginatedLeave = leaveList.slice((leavePage - 1) * PAGE_SIZE, leavePage * PAGE_SIZE);
+  const paginatedOt = otList.slice((otPage - 1) * PAGE_SIZE, otPage * PAGE_SIZE);
 
   const canCancelLeave = (l: LeaveRequest) => {
     if (l.status !== "Pending" && l.status !== "Approved") return false;
@@ -112,69 +164,87 @@ export function Requests() {
           leaveList.length === 0 ? (
             <EmptyState icon="umbrella" title="No leave requests" subtitle="No records for the selected period." />
           ) : (
+            <>
+              <div className="space-y-2">
+                {paginatedLeave.map((l) => (
+                  <Card key={l.id}>
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="text-sm font-bold text-slate-800 dark:text-slate-100">{l.leaveType}</p>
+                        <p className="text-xs text-slate-400">{l.days} day(s)</p>
+                      </div>
+                      <StatusBadge status={l.status} />
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {l.leaveDate.map((d) => (
+                        <Badge key={d} tone="indigo">{d}</Badge>
+                      ))}
+                    </div>
+                    {l.reason && <p className="mt-2 text-sm text-slate-500 dark:text-slate-300">{l.reason}</p>}
+                    {l.cancellationReason && (
+                      <p className="mt-1 rounded-lg bg-rose-50 p-2 text-xs text-rose-600 dark:bg-rose-500/10 dark:text-rose-300">
+                        Cancelled: {l.cancellationReason}
+                      </p>
+                    )}
+                    {canCancelLeave(l) && (
+                      <Button variant="secondary" className="mt-3" full icon="x"
+                        onClick={() => { setCancelTarget({ kind: "leave", id: l.id }); setReason(""); }}>
+                        Cancel request
+                      </Button>
+                    )}
+                  </Card>
+                ))}
+              </div>
+              <Paginator
+                page={leavePage}
+                totalPages={leaveTotalPages}
+                totalItems={leaveList.length}
+                pageSize={PAGE_SIZE}
+                onChange={setLeavePage}
+              />
+            </>
+          )
+        ) : otList.length === 0 ? (
+          <EmptyState icon="bolt" title="No OT requests" subtitle="No records for the selected period." />
+        ) : (
+          <>
             <div className="space-y-2">
-              {leaveList.map((l) => (
-                <Card key={l.id}>
+              {paginatedOt.map((o) => (
+                <Card key={o.id}>
                   <div className="flex items-start justify-between">
                     <div>
-                      <p className="text-sm font-bold text-slate-800 dark:text-slate-100">{l.leaveType}</p>
-                      <p className="text-xs text-slate-400">{l.days} day(s)</p>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-100">{o.otType}</p>
+                      <p className="text-xs text-slate-400">{o.typeCode} · {o.durationHours}h</p>
                     </div>
-                    <StatusBadge status={l.status} />
+                    <StatusBadge status={o.status} />
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {l.leaveDate.map((d) => (
-                      <Badge key={d} tone="indigo">{d}</Badge>
-                    ))}
+                  <div className="mt-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-300">
+                    <Icon name="calendar" size={14} /> {o.otDate}
+                    {o.otShift && <Badge>{o.otShift}</Badge>}
                   </div>
-                  {l.reason && <p className="mt-2 text-sm text-slate-500 dark:text-slate-300">{l.reason}</p>}
-                  {l.cancellationReason && (
+                  {o.reason && <p className="mt-2 text-sm text-slate-500 dark:text-slate-300">{o.reason}</p>}
+                  {o.cancellationReason && (
                     <p className="mt-1 rounded-lg bg-rose-50 p-2 text-xs text-rose-600 dark:bg-rose-500/10 dark:text-rose-300">
-                      Cancelled: {l.cancellationReason}
+                      Cancelled: {o.cancellationReason}
                     </p>
                   )}
-                  {canCancelLeave(l) && (
+                  {canCancelOt(o) && (
                     <Button variant="secondary" className="mt-3" full icon="x"
-                      onClick={() => { setCancelTarget({ kind: "leave", id: l.id }); setReason(""); }}>
+                      onClick={() => { setCancelTarget({ kind: "ot", id: o.id }); setReason(""); }}>
                       Cancel request
                     </Button>
                   )}
                 </Card>
               ))}
             </div>
-          )
-        ) : otList.length === 0 ? (
-          <EmptyState icon="bolt" title="No OT requests" subtitle="No records for the selected period." />
-        ) : (
-          <div className="space-y-2">
-            {otList.map((o) => (
-              <Card key={o.id}>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-100">{o.otType}</p>
-                    <p className="text-xs text-slate-400">{o.typeCode} · {o.durationHours}h</p>
-                  </div>
-                  <StatusBadge status={o.status} />
-                </div>
-                <div className="mt-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-300">
-                  <Icon name="calendar" size={14} /> {o.otDate}
-                  {o.otShift && <Badge>{o.otShift}</Badge>}
-                </div>
-                {o.reason && <p className="mt-2 text-sm text-slate-500 dark:text-slate-300">{o.reason}</p>}
-                {o.cancellationReason && (
-                  <p className="mt-1 rounded-lg bg-rose-50 p-2 text-xs text-rose-600 dark:bg-rose-500/10 dark:text-rose-300">
-                    Cancelled: {o.cancellationReason}
-                  </p>
-                )}
-                {canCancelOt(o) && (
-                  <Button variant="secondary" className="mt-3" full icon="x"
-                    onClick={() => { setCancelTarget({ kind: "ot", id: o.id }); setReason(""); }}>
-                    Cancel request
-                  </Button>
-                )}
-              </Card>
-            ))}
-          </div>
+            <Paginator
+              page={otPage}
+              totalPages={otTotalPages}
+              totalItems={otList.length}
+              pageSize={PAGE_SIZE}
+              onChange={setOtPage}
+            />
+          </>
         )}
         </div>
       </PullToRefresh>

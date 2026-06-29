@@ -169,6 +169,10 @@ export interface CoverageRequest {
   coveredById?: string;
   takenBy?: string;
   createdAt: number;
+  /** For Coveredby records: the ID of the original CoverageList record */
+  originalCoverageId?: string;
+  /** For Coveredby records: Unix-ms timestamp when coverage takeover started */
+  coverageStartTs?: number;
 }
 
 export interface Infraction {

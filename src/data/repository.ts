@@ -80,15 +80,20 @@ export interface Repository {
 
   // OT requests
   getOtRequests(employeeId: string): Promise<OtRequest[]>;
+  subscribeOtRequests(employeeId: string, callback: (ot: OtRequest[]) => void): () => void;
   createOtRequest(request: OtRequest): Promise<void>;
   updateOtRequest(id: string, patch: Partial<OtRequest>): Promise<void>;
 
   // Coverage
   getCoverage(): Promise<CoverageRequest[]>;
+  subscribeCoverage(callback: (coverage: CoverageRequest[]) => void): () => void;
+  subscribeCoveredby(employeeId: string, callback: (coveredby: CoverageRequest[]) => void): () => void;
   getCoveredby(): Promise<CoverageRequest[]>;
   createCoverage(request: CoverageRequest): Promise<void>;
   createCoveredby(request: CoverageRequest): Promise<void>;
   updateCoverage(id: string, patch: Partial<CoverageRequest>): Promise<void>;
+  updateCoveredby(id: string, patch: Partial<CoverageRequest>): Promise<void>;
+  deleteCoveredby(id: string): Promise<void>;
   deleteCoverageByFilter(filter: {
     coverageType: string;
     requesterId: string;
@@ -185,6 +190,10 @@ class LocalOfflineRepository implements Repository {
   async getOtRequests(_id: string) {
     return seedOt;
   }
+  subscribeOtRequests(_id: string, callback: (ot: OtRequest[]) => void): () => void {
+    void Promise.resolve(seedOt).then(callback);
+    return () => {};
+  }
   async createOtRequest(_r: OtRequest) {
     /* read-only offline */
   }
@@ -194,6 +203,14 @@ class LocalOfflineRepository implements Repository {
 
   async getCoverage() {
     return seedCoverage;
+  }
+  subscribeCoverage(callback: (coverage: CoverageRequest[]) => void): () => void {
+    void Promise.resolve(seedCoverage).then(callback);
+    return () => {};
+  }
+  subscribeCoveredby(_id: string, callback: (coveredby: CoverageRequest[]) => void): () => void {
+    void Promise.resolve([] as CoverageRequest[]).then(callback);
+    return () => {};
   }
   async getCoveredby() {
     return [] as CoverageRequest[];
@@ -205,6 +222,12 @@ class LocalOfflineRepository implements Repository {
     /* read-only offline */
   }
   async updateCoverage(_id: string, _patch: Partial<CoverageRequest>) {
+    /* read-only offline */
+  }
+  async updateCoveredby(_id: string, _patch: Partial<CoverageRequest>) {
+    /* read-only offline */
+  }
+  async deleteCoveredby(_id: string) {
     /* read-only offline */
   }
   async deleteCoverageByFilter() {
@@ -444,6 +467,9 @@ interface FbCoverageRecord {
   Full_Name?: string;
   requesterName?: string;
   Reason?: string;
+  // Coveredby-specific fields
+  originalCoverageId?: string;   // links back to the CoverageList record
+  coverageStartTs?: number;      // Unix-ms when takeover started
 }
 
 interface FbInfractionRecord {
@@ -749,6 +775,17 @@ export class FirebaseRepository implements Repository {
       .sort((a, b) => b.createdAt - a.createdAt);
   }
 
+  subscribeOtRequests(employeeId: string, callback: (ot: OtRequest[]) => void): () => void {
+    return onValue(ref(this.db, "OTRequests"), (snap) => {
+      const raw = toObject<Record<string, FbOtRecord>>(snap) ?? {};
+      const results = Object.entries(raw)
+        .map(([id, rec]) => mapOt(id, rec))
+        .filter((o) => o.employeeId === employeeId)
+        .sort((a, b) => b.createdAt - a.createdAt);
+      callback(results);
+    });
+  }
+
   async createOtRequest(request: OtRequest) {
     const fb = mapOtToFb(request);
     await set(ref(this.db, `OTRequests/${request.id}`), fb);
@@ -783,6 +820,29 @@ export class FirebaseRepository implements Repository {
       .sort((a, b) => b.createdAt - a.createdAt);
   }
 
+  subscribeCoverage(callback: (coverage: CoverageRequest[]) => void): () => void {
+    return onValue(ref(this.db, "CoverageList"), (snap) => {
+      const raw = toObject<Record<string, FbCoverageRecord>>(snap) ?? {};
+      callback(
+        Object.entries(raw)
+          .map(([id, rec]) => mapCoverage(id, rec))
+          .sort((a, b) => b.createdAt - a.createdAt),
+      );
+    });
+  }
+
+  subscribeCoveredby(employeeId: string, callback: (coveredby: CoverageRequest[]) => void): () => void {
+    return onValue(ref(this.db, "Coveredby"), (snap) => {
+      const raw = toObject<Record<string, FbCoverageRecord>>(snap) ?? {};
+      callback(
+        Object.entries(raw)
+          .map(([id, rec]) => mapCoverage(id, rec))
+          .filter((c) => c.coveredById === employeeId || c.requesterId === employeeId)
+          .sort((a, b) => b.createdAt - a.createdAt),
+      );
+    });
+  }
+
   async createCoverage(request: CoverageRequest) {
     const fb = mapCoverageToFb(request);
     await set(ref(this.db, `CoverageList/${request.id}`), fb);
@@ -797,15 +857,16 @@ export class FirebaseRepository implements Repository {
     const mapped = mapCoveragePatchToFb(patch);
     if (Object.keys(mapped).length === 0) return;
     await update(ref(this.db, `CoverageList/${id}`), mapped);
-    // When coverage transitions away from `Ongoing`, also clear the
-    // companion `/Coveredby/{id}` node (legacy behavior).
-    if (patch.coverageStatus && patch.coverageStatus !== "Ongoing") {
-      try {
-        await remove(ref(this.db, `Coveredby/${id}`));
-      } catch {
-        /* ignore */
-      }
-    }
+  }
+
+  async updateCoveredby(id: string, patch: Partial<CoverageRequest>) {
+    const mapped = mapCoveragePatchToFb(patch);
+    if (Object.keys(mapped).length === 0) return;
+    await update(ref(this.db, `Coveredby/${id}`), mapped);
+  }
+
+  async deleteCoveredby(id: string) {
+    await remove(ref(this.db, `Coveredby/${id}`));
   }
 
   async deleteCoverageByFilter(filter: {
@@ -1184,19 +1245,15 @@ function mapCoverage(id: string, rec: FbCoverageRecord): CoverageRequest {
     coveredById: rec.CoveredbyID,
     takenBy: rec.TakenBy,
     createdAt: Date.now(),
+    originalCoverageId: rec.originalCoverageId,
+    coverageStartTs: rec.coverageStartTs !== undefined ? asNumber(rec.coverageStartTs) : undefined,
   };
 }
 
 function mapCoverageToFb(c: CoverageRequest): Record<string, unknown> {
   // Firebase RTDB rejects any field whose value is `undefined`. Optional
   // fields must be given a safe default when absent.
-  //
-  // Per the schema cleanup we NO LONGER write these redundant fields:
-  //   CoveragePosition, CoveredbyID, Full_Name, Reason, TakenBy,
-  //   requesterId, requesterName
-  // `Employee_ID_Number` already identifies the requester and `Position`
-  // already carries the position string.
-  return {
+  const m: Record<string, unknown> = {
     CoverageID: c.coverageId,
     CoverageDate: c.coverageDate,
     CoverageTime: c.coverageTime ?? "",
@@ -1207,12 +1264,24 @@ function mapCoverageToFb(c: CoverageRequest): Record<string, unknown> {
     CoverageStatus: c.coverageStatus ?? "Available",
     Days_Off: c.daysOff ?? "",
     Position: c.position ?? "",
+    // Employee_ID_Number stores the record owner (requester for CoverageList,
+    // grabber/coverer for Coveredby records).
     Employee_ID_Number: c.requesterId ?? "",
     CoveredHours: c.coveredHours ?? 0,
     Phone_Name: c.phoneName ?? "",
     Schedule: c.schedule ?? "",
     Team: c.team ?? "",
+    // Persist denormalised name/reason so hydration can reconstruct the record
+    requesterName: c.requesterName ?? "",
+    Reason: c.reason ?? "",
+    requesterId: c.requesterId ?? "",
   };
+  // Coveredby-specific fields
+  if (c.coveredById !== undefined) m.CoveredbyID = c.coveredById;
+  if (c.takenBy !== undefined) m.TakenBy = c.takenBy;
+  if (c.originalCoverageId !== undefined) m.originalCoverageId = c.originalCoverageId;
+  if (c.coverageStartTs !== undefined) m.coverageStartTs = c.coverageStartTs;
+  return m;
 }
 
 function mapCoveragePatchToFb(p: Partial<CoverageRequest>): Record<string, unknown> {
@@ -1221,6 +1290,7 @@ function mapCoveragePatchToFb(p: Partial<CoverageRequest>): Record<string, unkno
   if (p.coveredById !== undefined) m.CoveredbyID = p.coveredById;
   if (p.takenBy !== undefined) m.TakenBy = p.takenBy;
   if (p.coveredHours !== undefined) m.CoveredHours = p.coveredHours;
+  if (p.forCoverageHours !== undefined) m.forCoverageHours = p.forCoverageHours;
   return m;
 }
 

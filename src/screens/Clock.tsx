@@ -136,15 +136,15 @@ export function Clock() {
             {isClockedIn ? "Currently Clocked In" : "Currently Clocked Out"}
           </div>
           {profile.isFlextime && (
-            <Badge tone="indigo" className="mt-3">
-              Flextime Schedule
-            </Badge>
+            <div className="mt-3 flex justify-center">
+              <Badge tone="indigo">Flextime Schedule</Badge>
+            </div>
           )}
         </Card>
 
         {/* Combined connection + server-time status banner */}
         <div
-          className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm ${
+          className={`flex items-center gap-3 rounded-xl px-4 py-3 ${
             !isOnline
               ? "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300"
               : !safe
@@ -154,16 +154,25 @@ export function Clock() {
         >
           <Icon
             name={!isOnline ? "wifi-off" : !safe ? "alert" : "shield"}
-            size={16}
+            size={18}
             className="shrink-0"
           />
-          <span>
-            {!isOnline
-              ? "No connection — clock actions blocked"
-              : !safe
-                ? `Clock skewed by ${Math.round(skewMs / 1000)}s — clock actions blocked`
-                : `Connected · Server time verified`}
-          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold leading-tight">
+              {!isOnline
+                ? "No Connection"
+                : !safe
+                  ? "Clock Time Skewed"
+                  : "Synchronized"}
+            </p>
+            <p className="mt-0.5 text-xs opacity-75">
+              {!isOnline
+                ? "Clock actions are unavailable until connection is restored"
+                : !safe
+                  ? `Local clock is off by ${Math.round(skewMs / 1000)}s — clock actions are blocked`
+                  : "Server time verified · All clock actions are available"}
+            </p>
+          </div>
         </div>
 
         {/* Active session card — visible whenever there is an open record,

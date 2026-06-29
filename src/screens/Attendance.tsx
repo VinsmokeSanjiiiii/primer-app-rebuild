@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useApp } from "../store";
 import { AppBar } from "../components/AppBar";
 import { Card, Button, Dialog, TextArea, EmptyState, Badge } from "../components/ui";
@@ -15,12 +15,53 @@ import {
 } from "../lib/date";
 import type { AttendanceRecord } from "../types";
 
+const PAGE_SIZE = 10;
+
 function buildYears(): string[] {
   const curr = currentServerYear();
   const base = [2024, 2025, 2026];
   if (!base.includes(curr)) base.push(curr);
   base.sort((a, b) => a - b);
   return base.map(String);
+}
+
+function Paginator({
+  page,
+  totalPages,
+  totalItems,
+  pageSize,
+  onChange,
+}: {
+  page: number;
+  totalPages: number;
+  totalItems: number;
+  pageSize: number;
+  onChange: (p: number) => void;
+}) {
+  if (totalPages <= 1) return null;
+  const from = (page - 1) * pageSize + 1;
+  const to = Math.min(page * pageSize, totalItems);
+  return (
+    <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-2.5 dark:border-white/10 dark:bg-white/5">
+      <button
+        disabled={page === 1}
+        onClick={() => onChange(page - 1)}
+        className="flex items-center gap-1 text-xs font-semibold text-indigo-600 disabled:cursor-not-allowed disabled:text-slate-300 dark:text-indigo-400 dark:disabled:text-slate-600"
+      >
+        ‹ Prev
+      </button>
+      <span className="text-xs text-slate-500 dark:text-slate-400">
+        {from}–{to} of {totalItems}
+      </span>
+      <button
+        disabled={page === totalPages}
+        onClick={() => onChange(page + 1)}
+        className="flex items-center gap-1 text-xs font-semibold text-indigo-600 disabled:cursor-not-allowed disabled:text-slate-300 dark:text-indigo-400 dark:disabled:text-slate-600"
+      >
+        Next ›
+      </button>
+    </div>
+  );
 }
 
 export function Attendance() {
@@ -31,6 +72,7 @@ export function Attendance() {
   const [lockedDialog, setLockedDialog] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   const FILTER_YEARS = useMemo(() => buildYears(), []);
 
@@ -53,6 +95,13 @@ export function Attendance() {
       });
   }, [attendance, filterMonth, filterYear]);
 
+  // Reset to page 1 whenever the filtered result set changes
+  useEffect(() => {
+    setPage(1);
+  }, [filtered]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const totalHours = filtered.reduce((s, r) => s + (r.totalHours ?? 0), 0);
 
   const tryEdit = (rec: AttendanceRecord) => {
@@ -69,7 +118,7 @@ export function Attendance() {
       <AppBar title="Attendance" subtitle="History & notes" />
       <PullToRefresh className="flex-1" scrollClassName="px-4 pb-6 pt-4" onRefresh={refreshData}>
         <div className="space-y-4">
-          {/* Unified month/year filter (same design as Requests) */}
+          {/* Unified month/year filter */}
           <DateFilter
             month={filterMonth}
             year={filterYear}
@@ -82,7 +131,7 @@ export function Attendance() {
             }}
           />
 
-          {/* Total */}
+          {/* Summary banner */}
           <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-600 via-indigo-600 to-violet-600 px-4 py-3.5 text-white shadow-lg shadow-indigo-600/25">
             <div className="pointer-events-none absolute -right-6 -top-6 h-24 w-24 rounded-full bg-white/10 blur-2xl" />
             <div className="relative flex items-center justify-between">
@@ -102,57 +151,67 @@ export function Attendance() {
           {filtered.length === 0 ? (
             <EmptyState icon="calendar" title="No records" subtitle="Adjust the date range to see attendance." />
           ) : (
-            <div className="space-y-2">
-              {filtered.map((r) => {
-                const locked = noteIsLocked(r);
-                const isOpen = expanded === r.id;
-                return (
-                  <Card key={r.id}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-bold text-slate-800 dark:text-slate-100">{r.dateIn}</p>
-                        <p className="truncate text-xs text-slate-400">{r.recordType} · {r.status}</p>
+            <>
+              <div className="space-y-2">
+                {paginated.map((r) => {
+                  const locked = noteIsLocked(r);
+                  const isOpen = expanded === r.id;
+                  return (
+                    <Card key={r.id}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-bold text-slate-800 dark:text-slate-100">{r.dateIn}</p>
+                          <p className="truncate text-xs text-slate-400">{r.recordType} · {r.status}</p>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className="text-sm font-black tabular-nums text-indigo-600 dark:text-indigo-400">
+                            {r.totalHours != null ? `${r.totalHours.toFixed(2)} h` : "—"}
+                          </p>
+                          {r.minsLate > 0 && <Badge tone="rose">{r.minsLate}m late</Badge>}
+                        </div>
                       </div>
-                      <div className="shrink-0 text-right">
-                        <p className="text-sm font-black tabular-nums text-indigo-600 dark:text-indigo-400">
-                          {r.totalHours != null ? `${r.totalHours.toFixed(2)} h` : "—"}
-                        </p>
-                        {r.minsLate > 0 && <Badge tone="rose">{r.minsLate}m late</Badge>}
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                        <TimeBox label="Time in" date={r.dateIn} time={r.timeIn} />
+                        <TimeBox label="Time out" date={r.dateOut} time={r.timeOut} />
                       </div>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                      <TimeBox label="Time in" date={r.dateIn} time={r.timeIn} />
-                      <TimeBox label="Time out" date={r.dateOut} time={r.timeOut} />
-                    </div>
 
-                    {/* Note */}
-                    <div className="mt-3 rounded-xl bg-slate-50 p-3 dark:bg-white/5">
-                      <div className="flex items-center justify-between">
-                        <span className="flex items-center gap-1.5 text-xs font-bold text-slate-500">
-                          <Icon name={locked ? "lock" : "edit"} size={13} /> Note
-                        </span>
-                        <button
-                          onClick={() => tryEdit(r)}
-                          className="text-xs font-bold text-indigo-600 dark:text-indigo-400"
-                        >
-                          {locked ? "Locked" : r.note ? "Edit" : "Add note"}
-                        </button>
+                      {/* Note */}
+                      <div className="mt-3 rounded-xl bg-slate-50 p-3 dark:bg-white/5">
+                        <div className="flex items-center justify-between">
+                          <span className="flex items-center gap-1.5 text-xs font-bold text-slate-500">
+                            <Icon name={locked ? "lock" : "edit"} size={13} /> Note
+                          </span>
+                          <button
+                            onClick={() => tryEdit(r)}
+                            className="text-xs font-bold text-indigo-600 dark:text-indigo-400"
+                          >
+                            {locked ? "Locked" : r.note ? "Edit" : "Add note"}
+                          </button>
+                        </div>
+                        {r.note ? (
+                          <p
+                            className={`mt-1 text-sm text-slate-600 dark:text-slate-300 ${isOpen ? "" : "line-clamp-2"}`}
+                            onClick={() => setExpanded(isOpen ? null : r.id)}
+                          >
+                            {r.note}
+                          </p>
+                        ) : (
+                          <p className="mt-1 text-sm text-slate-400">No note added.</p>
+                        )}
                       </div>
-                      {r.note ? (
-                        <p
-                          className={`mt-1 text-sm text-slate-600 dark:text-slate-300 ${isOpen ? "" : "line-clamp-2"}`}
-                          onClick={() => setExpanded(isOpen ? null : r.id)}
-                        >
-                          {r.note}
-                        </p>
-                      ) : (
-                        <p className="mt-1 text-sm text-slate-400">No note added.</p>
-                      )}
-                    </div>
-                  </Card>
-                );
-              })}
-            </div>
+                    </Card>
+                  );
+                })}
+              </div>
+
+              <Paginator
+                page={page}
+                totalPages={totalPages}
+                totalItems={filtered.length}
+                pageSize={PAGE_SIZE}
+                onChange={setPage}
+              />
+            </>
           )}
         </div>
       </PullToRefresh>

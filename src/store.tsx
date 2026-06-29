@@ -216,7 +216,8 @@ interface AppState {
   cancelOt: (id: string, reason: string) => void;
   submitTechCoverage: (c: Omit<CoverageRequest, "id" | "coverageId" | "createdAt">) => void;
   takeoverCoverage: (id: string) => void;
-  cancelCoverage: (id: string) => void;
+  cancelCoverage: (coveredbyId: string) => void;
+  finishCoverage: (coveredbyId: string, coveredHoursSpent: number) => void;
   changeLeaveDate: (kind: "leave" | "ot", id: string, newDate: string) => void;
   updateProfile: (patch: Partial<Profile>) => void;
   markNotificationRead: (id: string) => void;
@@ -462,10 +463,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (remember) localStorage.setItem(SESSION_KEY, JSON.stringify(meta));
       else sessionStorage.setItem(SESSION_KEY, JSON.stringify(meta));
 
-      // Hydrate everything before the dashboard mounts so no screen
-      // ever shows stale or seed data after a successful login.
-      const p = await hydrateAll(employeeId);
+      // Fast path: if a cached snapshot exists (return login), paint the
+      // dashboard immediately from cache and hydrate fresh data in background.
+      const cached = loadSnapshot(employeeId);
+      if (cached) {
+        if (cached.profile) setProfile(cached.profile);
+        setAttendance(cached.attendance ?? []);
+        setLeaves(cached.leaves ?? []);
+        setOt(cached.ot ?? []);
+        setCoverage(cached.coverage ?? []);
+        setInfractions(cached.infractions ?? []);
+        setHolidays(cached.holidays ?? []);
+        setNotifications(cached.notifications ?? []);
+        setScreen("dashboard");
+        setStack([]);
+        void hydrateAll(employeeId); // refresh in background
+        return { success: true, employeeId, fullName: cached.profile?.fullName };
+      }
 
+      // Slow path (first login — no cache): await full hydration before
+      // navigating so the dashboard never shows an empty state.
+      const p = await hydrateAll(employeeId);
       setScreen("dashboard");
       setStack([]);
       return { success: true, employeeId, fullName: p?.fullName };
@@ -591,13 +609,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     } catch { /* non-fatal */ }
 
-    // Phase 2: background live fetch — refresh from server without blocking UI.
+    // Phase 2: background live fetch — server-time and session resolved in
+    // parallel so there's no unnecessary sequential round-trip.
     (async () => {
       try {
-        const offset = await repo.getServerTimeOffsetMs();
+        const [offset, sessionData] = await Promise.all([
+          repo.getServerTimeOffsetMs(),
+          repo.getSession(),
+        ]);
         if (!cancelled && typeof offset === "number") setServerTimeOffsetMs(offset);
 
-        const sessionEmp = (await repo.getSession())?.employeeId;
+        const sessionEmp = sessionData?.employeeId;
         if (sessionEmp && !cancelled) {
           await hydrateAll(sessionEmp);
         }
@@ -616,15 +638,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await hydrateAll(session.employeeId);
   }, [session?.employeeId, hydrateAll]);
 
-  // ---- real-time leaves listener ----
-  // Subscribes to Firebase LeaveRequests via onValue so the UI updates
-  // instantly when an admin approves/rejects a leave without a manual refresh.
+  // ---- real-time data listeners ----
+  // Subscribe to Firebase nodes via onValue so the UI reflects admin changes
+  // instantly without a manual pull-to-refresh.
   useEffect(() => {
     if (!profile?.employeeId) return;
     const empId = profile.employeeId;
-    return repo.subscribeLeaves(empId, (freshLeaves) => {
-      setLeaves(freshLeaves);
-    });
+    const unsubLeaves = repo.subscribeLeaves(empId, setLeaves);
+    const unsubOt = repo.subscribeOtRequests(empId, setOt);
+    const unsubCoverage = repo.subscribeCoverage(setCoverage);
+    const unsubCoveredby = repo.subscribeCoveredby(empId, setCoveredby);
+    return () => {
+      unsubLeaves();
+      unsubOt();
+      unsubCoverage();
+      unsubCoveredby();
+    };
   }, [profile?.employeeId, repo]);
 
   // Re-reconcile the active clock session whenever the user comes back to
@@ -1035,9 +1064,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const takeoverCoverage = useCallback(
     (id: string) => {
       if (!profile) return;
-      // Prevent duplicate: do not grab if already taken by this user in coveredby
+      // Prevent duplicate: do not grab if already taken by this user in an active Ongoing coveredby record
       const alreadyTaken = coveredby.some(
-        (c) => c.id === id && c.coveredById === profile.employeeId,
+        (c) =>
+          c.originalCoverageId === id &&
+          c.coveredById === profile.employeeId &&
+          c.coverageStatus === "Ongoing",
       );
       if (alreadyTaken) {
         toast("You already have this coverage.", "info");
@@ -1045,59 +1077,120 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       const original = coverage.find((c) => c.id === id);
       if (!original) return;
-      const updated: CoverageRequest = {
-        ...original,
+
+      // Create a brand-new Coveredby record with a new unique ID
+      // using the grabber's profile data, NOT modifying the original CoverageList
+      const newCovId = randomRecordId();
+      const coveredbyRecord: CoverageRequest = {
+        id: newCovId,
+        coverageId: newCovId,
+        employeeId: profile.employeeId,
+        requesterId: profile.employeeId,
+        requesterName: profile.fullName,
+        phoneName: profile.phoneName,
+        coverageDate: original.coverageDate,
+        coverageTime: original.coverageTime,
+        coverageType: original.coverageType,
         coverageStatus: "Ongoing" as const,
+        forCoverageHours: original.forCoverageHours,
+        coveredHours: 0,
+        daysOff: profile.daysOff,
+        position: profile.position,
+        schedule: original.coverageTime,
+        month: original.month,
+        year: original.year,
+        team: profile.team,
+        reason: original.reason,
         coveredById: profile.employeeId,
         takenBy: profile.fullName,
-        coveredHours: original.forCoverageHours,
+        originalCoverageId: original.id,
+        coverageStartTs: serverNow().getTime(),
+        createdAt: Date.now(),
       };
-      setCoverage((prev) =>
-        prev.map((c) => (c.id !== id || c.requesterId === profile.employeeId ? c : updated)),
-      );
-      // Add to local coveredby state
-      setCoveredby((prev) => {
-        if (prev.some((c) => c.id === id)) return prev;
-        return [updated, ...prev];
-      });
-      void safeWrite("Coverage update", () => repo.updateCoverage(id, {
-          coverageStatus: "Ongoing",
-          coveredById: profile.employeeId,
-          takenBy: profile.fullName,
-        }), { critical: true, retries: 2, toast });
-      // Create companion Coveredby record in Firebase
-      void safeWrite("Coveredby create", () => repo.createCoveredby(updated), { critical: true, retries: 2, toast });
-      toast("Coverage taken over. Status set to Ongoing.", "success");
+
+      // Add to local coveredby list; the CoverageList record stays "Available"
+      setCoveredby((prev) => [coveredbyRecord, ...prev]);
+
+      // Persist the new Coveredby record to Firebase
+      void safeWrite("Coveredby create", () => repo.createCoveredby(coveredbyRecord), { critical: true, retries: 2, toast });
+      toast("Coverage grabbed! Status set to Ongoing.", "success");
     },
     [profile, toast, repo, coverage, coveredby],
   );
 
   const cancelCoverage = useCallback(
-    (id: string) => {
-      setCoverage((prev) =>
+    (coveredbyId: string) => {
+      // Remove the Coveredby record; the original CoverageList stays Available
+      setCoveredby((prev) => prev.filter((c) => c.id !== coveredbyId));
+      void safeWrite("Coveredby delete", () => repo.deleteCoveredby(coveredbyId), { critical: true, retries: 2, toast });
+      toast("Coverage cancelled.", "info");
+    },
+    [toast, repo],
+  );
+
+  const finishCoverage = useCallback(
+    (coveredbyId: string, coveredHoursSpent: number) => {
+      if (!profile) return;
+
+      // Find the Coveredby record
+      const coveredbyRec = coveredby.find((c) => c.id === coveredbyId);
+      if (!coveredbyRec) return;
+
+      const origId = coveredbyRec.originalCoverageId;
+
+      // Update Coveredby record to Completed with actual hours spent
+      setCoveredby((prev) =>
         prev.map((c) =>
-          c.id === id
-            ? {
-                ...c,
-                coverageStatus: "Available" as const,
-                coveredById: undefined,
-                takenBy: undefined,
-                coveredHours: undefined,
-              }
+          c.id === coveredbyId
+            ? { ...c, coverageStatus: "Completed" as const, coveredHours: coveredHoursSpent }
             : c,
         ),
       );
-      // Remove from local coveredby state
-      setCoveredby((prev) => prev.filter((c) => c.id !== id));
-      void safeWrite("Coverage update", () => repo.updateCoverage(id, {
-          coverageStatus: "Available",
-          coveredById: undefined,
-          takenBy: undefined,
-          coveredHours: undefined,
-        }), { critical: true, retries: 2, toast });
-      toast("Coverage cancelled and returned to Available.", "info");
+      void safeWrite(
+        "Coveredby finish",
+        () => repo.updateCoveredby(coveredbyId, {
+          coverageStatus: "Completed",
+          coveredHours: coveredHoursSpent,
+        }),
+        { critical: true, retries: 2, toast },
+      );
+
+      // Update the original CoverageList record's coveredHours and forCoverageHours
+      if (origId) {
+        const originalRec = coverage.find((c) => c.id === origId);
+        if (originalRec) {
+          const newCoveredHours = (originalRec.coveredHours ?? 0) + coveredHoursSpent;
+          const newForCoverageHours = Math.max(0, originalRec.forCoverageHours - coveredHoursSpent);
+          const newStatus: CoverageRequest["coverageStatus"] =
+            newForCoverageHours === 0 ? "Completed" : "Available";
+
+          setCoverage((prev) =>
+            prev.map((c) =>
+              c.id === origId
+                ? {
+                    ...c,
+                    coveredHours: newCoveredHours,
+                    forCoverageHours: newForCoverageHours,
+                    coverageStatus: newStatus,
+                  }
+                : c,
+            ),
+          );
+          void safeWrite(
+            "CoverageList update after finish",
+            () => repo.updateCoverage(origId, {
+              coveredHours: newCoveredHours,
+              forCoverageHours: newForCoverageHours,
+              coverageStatus: newStatus,
+            }),
+            { critical: true, retries: 2, toast },
+          );
+        }
+      }
+
+      toast("Coverage completed! Great job.", "success");
     },
-    [toast, repo],
+    [profile, toast, repo, coveredby, coverage],
   );
 
   const changeLeaveDate = useCallback(
@@ -1198,6 +1291,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       submitTechCoverage,
       takeoverCoverage,
       cancelCoverage,
+      finishCoverage,
       changeLeaveDate,
       updateProfile,
       markNotificationRead,
@@ -1211,7 +1305,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       session, signIn, signInWithEmployeeId, signOut, dark, themeMode, setThemeMode, toggleDark, navBlur, setNavBlur, reduceMotion, setReduceMotion, screen, navigate, back, stack.length,
       profile, attendance, leaves, ot, coverage, coveredby, infractions, holidays, notifications,
       clockIn, clockOut, clockBusy, updateNote, submitLeave, cancelLeave, submitOt, cancelOt,
-      submitTechCoverage, takeoverCoverage, cancelCoverage, changeLeaveDate, updateProfile,
+      submitTechCoverage, takeoverCoverage, cancelCoverage, finishCoverage, changeLeaveDate, updateProfile,
       markNotificationRead, deleteNotification, toasts, toast, refreshData, hasHydrated,
     ],
   );
