@@ -200,6 +200,7 @@ export function Dialog({
       const t = setTimeout(() => setMounted(false), 200);
       return () => clearTimeout(t);
     }
+    return undefined;
   }, [open, mounted]);
 
   useEffect(() => {

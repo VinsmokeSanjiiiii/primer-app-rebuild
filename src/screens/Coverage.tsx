@@ -18,51 +18,93 @@ function buildYears(): string[] {
   return base.map(String);
 }
 
-// Team-based grab rules
-function canGrabCoverage(profileTeam: string, requesterTeam: string): boolean {
-  const team = profileTeam.toLowerCase();
-  const reqTeam = requesterTeam.toLowerCase();
+// Position hierarchy (highest = 0, lowest = 4)
+const POSITION_RANK: Record<string, number> = {
+  supervisor: 0,
+  inbound: 1,
+  "lima delta expert": 2,
+  "delta expert": 3,
+  tango: 4,
+};
 
-  if (team.includes("delta-expert") || team.includes("delta expert"))
-    return reqTeam.includes("delta");
-  if (team.includes("lima-delta-expert") || team.includes("lima delta expert"))
-    return reqTeam.includes("lima");
-  if (team.includes("inbound"))
-    return reqTeam.includes("inbound");
-  if (team.includes("supervisor") || team.includes("sup") || team.includes("lead"))
-    return true;
+function rankOf(pos: string): number {
+  const lower = pos.toLowerCase().trim();
+  for (const [key, rank] of Object.entries(POSITION_RANK)) {
+    if (lower.includes(key)) return rank;
+  }
+  return 99; // unknown
+}
 
-  return team === reqTeam;
+/**
+ * Grab eligibility rules:
+ *  Supervisor (0)       → can grab all (rank 0–4)
+ *  Inbound (1)          → can grab Inbound + Lima Delta Expert + Delta Expert + Tango (rank 1–4)
+ *  Lima Delta Expert(2) → can grab Lima Delta Expert + Delta Expert + Tango (rank 2–4)
+ *  Delta Expert (3)     → can grab Delta Expert + Tango (rank 3–4)
+ *  Tango (4)            → can grab Tango only (rank 4)
+ */
+function canGrabCoverage(profilePosition: string, recordPosition: string): boolean {
+  const myRank = rankOf(profilePosition);
+  const recRank = rankOf(recordPosition);
+  // Supervisor grabs all
+  if (myRank === 0) return true;
+  // Others can only grab records at their own rank or lower (higher number = lower position)
+  return recRank >= myRank;
+}
+
+/** Sort score for Available tab: 0 = grabbable, 1 = past, 2 = ungrabbable/own */
+function grabSortScore(
+  c: CoverageRequest,
+  profileEmployeeId: string,
+  profilePosition: string,
+  today: Date,
+): number {
+  const isOwn = c.requesterId === profileEmployeeId;
+  const isPast = parseDate(c.coverageDate) < today;
+  const eligible = canGrabCoverage(profilePosition, c.position ?? "");
+
+  if (!isOwn && !isPast && eligible) return 0; // grabbable
+  if (isPast) return 1;                         // past date
+  return 2;                                     // ungrabbable (own or ineligible)
 }
 
 type Tab = "available" | "ongoing" | "completed";
 
 export function Coverage() {
-  const { coverage, profile, takeoverCoverage, cancelCoverage, navigate } = useApp();
+  const { coverage, coveredby, profile, takeoverCoverage, cancelCoverage } = useApp();
 
   const FILTER_YEARS = useMemo(() => buildYears(), []);
 
   const [tab, setTab] = useState<Tab>("available");
-  // Available & Ongoing share a month/year filter, auto-init to current server month/year
   const [month, setMonth] = useState(() => currentServerMonth());
   const [year, setYear] = useState(() => String(currentServerYear()));
-  // Completed mine-only toggle
-  const [mineOnly, setMineOnly] = useState(false);
-  // Available pagination
+  const [completedMonth, setCompletedMonth] = useState(() => currentServerMonth());
+  const [completedYear, setCompletedYear] = useState(() => String(currentServerYear()));
   const [page, setPage] = useState(0);
   const [confirm, setConfirm] = useState<{ kind: "take" | "cancel"; req: CoverageRequest } | null>(null);
 
   const today = startOfDay(serverNow());
 
-  // ── Available ────────────────────────────────────────────────────────────
+  // ── Available (from CoverageList only, deduplicated, sorted) ──────────────
   const availableAll = useMemo(() => {
-    return coverage.filter((c) => {
+    const seen = new Set<string>();
+    const filtered = coverage.filter((c) => {
+      if (seen.has(c.id)) return false;
+      seen.add(c.id);
       const byStatus = c.coverageStatus === "Available";
       const byMonth = month === "All" || c.month === month;
       const byYear = year === "All" || String(c.year) === year;
       return byStatus && byMonth && byYear;
     });
-  }, [coverage, month, year]);
+
+    // Sort: grabbable (ascending) → past (ascending) → ungrabbable (ascending)
+    return filtered.sort((a, b) => {
+      const sa = grabSortScore(a, profile.employeeId, profile.position ?? "", today);
+      const sb = grabSortScore(b, profile.employeeId, profile.position ?? "", today);
+      if (sa !== sb) return sa - sb;
+      return parseDate(a.coverageDate).getTime() - parseDate(b.coverageDate).getTime();
+    });
+  }, [coverage, month, year, profile.employeeId, profile.position, today]);
 
   const availablePage = useMemo(() => {
     const start = page * ITEMS_PER_PAGE;
@@ -71,34 +113,33 @@ export function Coverage() {
 
   const totalPages = Math.max(1, Math.ceil(availableAll.length / ITEMS_PER_PAGE));
 
-  // ── Ongoing (current user's) ──────────────────────────────────────────────
+  // ── Ongoing (from Coveredby node — current user's records) ────────────────
   const ongoingList = useMemo(() => {
-    return coverage.filter((c) => {
-      const byStatus = c.coverageStatus === "Ongoing";
+    return coveredby.filter((c) => {
       const byUser = c.coveredById === profile.employeeId;
+      const byStatus = c.coverageStatus === "Ongoing";
       const byMonth = month === "All" || c.month === month;
       const byYear = year === "All" || String(c.year) === year;
-      return byStatus && byUser && byMonth && byYear;
+      return byUser && byStatus && byMonth && byYear;
     });
-  }, [coverage, profile.employeeId, month, year]);
+  }, [coveredby, profile.employeeId, month, year]);
 
-  // ── Completed ────────────────────────────────────────────────────────────
+  // ── Completed (from Coveredby node — current user's records only) ─────────
   const completedList = useMemo(() => {
-    const base = coverage.filter((c) => c.coverageStatus === "Completed");
-    const mine = mineOnly
-      ? base.filter(
-          (c) =>
-            c.requesterId === profile.employeeId ||
-            c.coveredById === profile.employeeId,
-        )
-      : base;
-    return [...mine].sort(
-      (a, b) =>
-        parseDate(b.coverageDate).getTime() - parseDate(a.coverageDate).getTime(),
-    );
-  }, [coverage, profile.employeeId, mineOnly]);
+    return coveredby
+      .filter((c) => {
+        const byUser = c.coveredById === profile.employeeId;
+        const byStatus = c.coverageStatus === "Completed";
+        const byMonth = completedMonth === "All" || c.month === completedMonth;
+        const byYear = completedYear === "All" || String(c.year) === completedYear;
+        return byUser && byStatus && byMonth && byYear;
+      })
+      .sort(
+        (a, b) =>
+          parseDate(a.coverageDate).getTime() - parseDate(b.coverageDate).getTime(),
+      );
+  }, [coveredby, profile.employeeId, completedMonth, completedYear]);
 
-  // Reset page when filters change
   const handleMonthChange = (v: string) => { setMonth(v); setPage(0); };
   const handleYearChange = (v: string) => { setYear(v); setPage(0); };
 
@@ -106,7 +147,7 @@ export function Coverage() {
     const isOwn = c.requesterId === profile.employeeId;
     const isMine = c.coveredById === profile.employeeId;
     const isPastDate = parseDate(c.coverageDate) < today;
-    const canGrab = canGrabCoverage(profile.team, c.team || "");
+    const canGrab = canGrabCoverage(profile.position ?? "", c.position ?? "");
 
     return (
       <Card key={c.id} className={isPastDate && tab !== "completed" ? "opacity-60" : ""}>
@@ -150,7 +191,7 @@ export function Coverage() {
           <Badge>{c.coverageType}</Badge>
           {c.takenBy && <Badge tone="sky">Taken by {c.takenBy}</Badge>}
           {isPastDate && tab !== "completed" && <Badge tone="slate">Past</Badge>}
-          {isOwn && <Badge tone="amber">Your request</Badge>}
+          {isOwn && tab === "available" && <Badge tone="amber">Your request</Badge>}
           {isMine && tab === "completed" && <Badge tone="green">You covered</Badge>}
         </div>
 
@@ -161,13 +202,16 @@ export function Coverage() {
               <span className="flex w-full items-center justify-center rounded-xl bg-slate-100 py-2 text-xs font-semibold text-slate-400 dark:bg-white/5">
                 Your own request
               </span>
+            ) : !canGrab ? (
+              <div className="flex w-full flex-col items-center gap-1 rounded-xl bg-slate-100 py-2 dark:bg-white/5">
+                <span className="text-xs font-semibold text-slate-400">Invalid Specialization</span>
+                {isPastDate && (
+                  <span className="text-xs font-semibold text-slate-400">· Past date</span>
+                )}
+              </div>
             ) : isPastDate ? (
               <span className="flex w-full items-center justify-center rounded-xl bg-slate-100 py-2 text-xs font-semibold text-slate-400 dark:bg-white/5">
                 Past date
-              </span>
-            ) : !canGrab ? (
-              <span className="flex w-full items-center justify-center rounded-xl bg-slate-100 py-2 text-xs font-semibold text-slate-400 dark:bg-white/5">
-                Different team
               </span>
             ) : (
               <Button full variant="tonal" icon="swap" onClick={() => setConfirm({ kind: "take", req: c })}>
@@ -189,10 +233,7 @@ export function Coverage() {
 
   return (
     <div className="flex h-full flex-col">
-      <AppBar
-        title="Coverage Board"
-        subtitle="Available, ongoing & completed"
-      />
+      <AppBar title="Coverage Board" subtitle="Available, ongoing & completed" />
       <div className="flex-1 space-y-4 overflow-y-auto px-4 pb-6 pt-4">
 
         {/* Tabs */}
@@ -216,7 +257,7 @@ export function Coverage() {
           ))}
         </div>
 
-        {/* Month/Year filter — shown on Available and Ongoing */}
+        {/* Month/Year filter — Available and Ongoing tabs */}
         {tab !== "completed" && (
           <DateFilter
             month={month}
@@ -232,26 +273,19 @@ export function Coverage() {
           />
         )}
 
-        {/* Completed: All / Mine toggle */}
+        {/* Month/Year filter — Completed tab */}
         {tab === "completed" && (
-          <div className="flex rounded-xl bg-slate-100 p-1 dark:bg-white/5">
-            <button
-              onClick={() => setMineOnly(false)}
-              className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
-                !mineOnly ? "bg-white text-indigo-600 shadow-sm dark:bg-slate-700 dark:text-indigo-300" : "text-slate-500"
-              }`}
-            >
-              All completed
-            </button>
-            <button
-              onClick={() => setMineOnly(true)}
-              className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
-                mineOnly ? "bg-white text-indigo-600 shadow-sm dark:bg-slate-700 dark:text-indigo-300" : "text-slate-500"
-              }`}
-            >
-              My records
-            </button>
-          </div>
+          <DateFilter
+            month={completedMonth}
+            year={completedYear}
+            years={FILTER_YEARS}
+            onMonthChange={(v) => setCompletedMonth(v)}
+            onYearChange={(v) => setCompletedYear(v)}
+            onReset={() => {
+              setCompletedMonth(currentServerMonth());
+              setCompletedYear(String(currentServerYear()));
+            }}
+          />
         )}
 
         {/* Content */}
@@ -298,7 +332,7 @@ export function Coverage() {
 
         {tab === "completed" && (
           completedList.length === 0 ? (
-            <EmptyState icon="shield" title="No completed coverage" subtitle={mineOnly ? "No completed records linked to you." : "No completed records found."} />
+            <EmptyState icon="shield" title="No completed coverage" subtitle="No completed records found for the selected period." />
           ) : (
             <div className="space-y-2">{completedList.map(renderCard)}</div>
           )

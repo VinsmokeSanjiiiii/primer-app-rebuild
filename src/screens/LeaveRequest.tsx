@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useApp } from "../store";
 import { AppBar } from "../components/AppBar";
 import { Card, Button, Dialog, TextArea } from "../components/ui";
@@ -27,6 +27,10 @@ export function LeaveRequest() {
   const [reason, setReason] = useState("");
   const [review, setReview] = useState(false);
   const [creditWarn, setCreditWarn] = useState(false);
+  const [attachFile, setAttachFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const dayOffIdx = useMemo(() => parseDaysOff(profile.daysOff), [profile.daysOff]);
 
@@ -161,7 +165,7 @@ export function LeaveRequest() {
     setReview(true);
   };
 
-  const confirm = () => {
+  const confirm = async () => {
     if (!type) return;
     const sorted = [...dates].sort((a, b) => parseDate(a).getTime() - parseDate(b).getTime());
     // Defense-in-depth: re-validate against the latest leaves at submit time
@@ -173,6 +177,33 @@ export function LeaveRequest() {
         return;
       }
     }
+
+    // Convert attachment to base64 and store directly in proofUrl
+    let proofUrl: string | undefined = undefined;
+    if (attachFile) {
+      setUploading(true);
+      setUploadProgress(0);
+      proofUrl = await new Promise<string | undefined>((resolve) => {
+        const reader = new FileReader();
+        reader.onprogress = (e) => {
+          if (e.lengthComputable) {
+            setUploadProgress(Math.round((e.loaded / e.total) * 90));
+          }
+        };
+        reader.onload = (e) => {
+          setUploadProgress(100);
+          resolve(e.target?.result as string | undefined);
+        };
+        reader.onerror = () => {
+          toast("Could not read attachment. Submitting without it.", "error");
+          resolve(undefined);
+        };
+        reader.readAsDataURL(attachFile);
+      });
+      setUploading(false);
+      setUploadProgress(0);
+    }
+
     submitLeave({
       employeeId: profile.employeeId,
       phoneName: profile.phoneName,
@@ -187,6 +218,7 @@ export function LeaveRequest() {
       month: monthName(parseDate(sorted[0])),
       daysOff: profile.daysOff,
       schedule: profile.schedule,
+      ...(proofUrl ? { proofUrl } : {}),
     });
     setReview(false);
     back();
@@ -254,6 +286,45 @@ export function LeaveRequest() {
               />
             )}
 
+            {/* Optional attachment */}
+            <div className="flex items-center gap-3 rounded-2xl border border-dashed border-slate-300 p-3 dark:border-white/20">
+              <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500 dark:bg-white/10">
+                <Icon name="camera" size={16} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                  {attachFile ? attachFile.name : "Attachment (optional)"}
+                </p>
+                {attachFile && (
+                  <p className="truncate text-xs text-slate-400">
+                    {(attachFile.size / 1024).toFixed(1)} KB
+                  </p>
+                )}
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,application/pdf"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) setAttachFile(f);
+                }}
+              />
+              {attachFile ? (
+                <Button
+                  variant="secondary"
+                  onClick={() => { setAttachFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}
+                >
+                  Remove
+                </Button>
+              ) : (
+                <Button variant="secondary" onClick={() => fileInputRef.current?.click()}>
+                  Browse
+                </Button>
+              )}
+            </div>
+
             <Button full disabled={!canReview} onClick={openReview} icon="check">
               Review request
             </Button>
@@ -283,8 +354,10 @@ export function LeaveRequest() {
         title="Review leave request"
         footer={
           <>
-            <Button variant="secondary" full onClick={() => setReview(false)}>Back</Button>
-            <Button full onClick={confirm} icon="check">Submit</Button>
+            <Button variant="secondary" full onClick={() => setReview(false)} disabled={uploading}>Back</Button>
+            <Button full onClick={() => { void confirm(); }} icon="check" disabled={uploading}>
+              {uploading ? `Processing… ${uploadProgress}%` : "Submit"}
+            </Button>
           </>
         }
       >
@@ -293,6 +366,21 @@ export function LeaveRequest() {
         <ReviewRow label="Days" value={`${dates.length}`} />
         <ReviewRow label="Full name" value={profile.fullName} />
         <ReviewRow label="Reason" value={reason || "Birthday leave"} />
+        {attachFile && <ReviewRow label="Attachment" value={attachFile.name} />}
+        {uploading && (
+          <div className="mt-1 space-y-1">
+            <div className="flex justify-between text-xs text-slate-400">
+              <span>Preparing attachment…</span>
+              <span>{uploadProgress}%</span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-white/10">
+              <div
+                className="h-full rounded-full bg-indigo-500 transition-all duration-200"
+                style={{ width: `${uploadProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
         <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
           Please double-check your details before submitting. Once sent, this request will be forwarded to your supervisor for approval and your leave balance will be updated.
         </p>

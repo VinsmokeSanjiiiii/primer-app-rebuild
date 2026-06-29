@@ -200,6 +200,7 @@ interface AppState {
   leaves: LeaveRequest[];
   ot: OtRequest[];
   coverage: CoverageRequest[];
+  coveredby: CoverageRequest[];
   infractions: Infraction[];
   holidays: Holiday[];
   notifications: AppNotification[];
@@ -318,6 +319,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
   const [ot, setOt] = useState<OtRequest[]>([]);
   const [coverage, setCoverage] = useState<CoverageRequest[]>([]);
+  const [coveredby, setCoveredby] = useState<CoverageRequest[]>([]);
   const [infractions, setInfractions] = useState<Infraction[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
@@ -345,12 +347,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // atomically so the dashboard only renders once the data is real.
   const hydrateAll = useCallback(
     async (empId: string) => {
-      const [p, a, l, o, c, i, h, notifs] = await Promise.all([
+      const [p, a, l, o, c, cb, i, h, notifs] = await Promise.all([
         repo.getProfile(empId).catch(() => null),
         repo.getAttendance(empId).catch(() => []),
         repo.getLeaves(empId).catch(() => []),
         repo.getOtRequests(empId).catch(() => []),
         repo.getCoverage().catch(() => []),
+        repo.getCoveredby().catch(() => []),
         repo.getInfractions(empId).catch(() => []),
         repo.getHolidays().catch(() => []),
         repo.getNotifications(empId).catch(() => []),
@@ -420,6 +423,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLeaves(l);
       setOt(o);
       setCoverage(coverageList);
+      setCoveredby(cb);
       setInfractions(i);
       setHolidays(h);
       setNotifications(notifs);
@@ -690,12 +694,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
         clockInTs: nowMs,
         note: "",
         noteLocked: false,
-        minsLate: 0,
+        minsLate: (() => {
+          if (profile.isFlextime) return 0;
+          const scheduleParts = (profile.schedule ?? "").split("-");
+          const startPart = scheduleParts[0]?.trim() ?? "";
+          const [shH, shM] = startPart.split(":").map(Number);
+          if (!Number.isNaN(shH) && !Number.isNaN(shM)) {
+            const scheduledStart = shH * 60 + shM;
+            const actualStart = now.getHours() * 60 + now.getMinutes();
+            return Math.max(0, actualStart - scheduledStart);
+          }
+          return 0;
+        })(),
         phoneName: profile.phoneName,
         team: profile.team,
         workSetup: profile.workSetup,
         recordType: profile.isFlextime ? "Flextime" : "Regular",
-        status: "Open",
+        status: "None",
         isClockedIn: true,
         month: monthName(now),
         year: phtYear(now),
@@ -1020,27 +1035,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const takeoverCoverage = useCallback(
     (id: string) => {
       if (!profile) return;
-      setCoverage((prev) =>
-        prev.map((c) => {
-          if (c.id !== id) return c;
-          if (c.requesterId === profile.employeeId) return c;
-          return {
-            ...c,
-            coverageStatus: "Ongoing" as const,
-            coveredById: profile.employeeId,
-            takenBy: profile.fullName,
-            coveredHours: c.forCoverageHours,
-          };
-        }),
+      // Prevent duplicate: do not grab if already taken by this user in coveredby
+      const alreadyTaken = coveredby.some(
+        (c) => c.id === id && c.coveredById === profile.employeeId,
       );
+      if (alreadyTaken) {
+        toast("You already have this coverage.", "info");
+        return;
+      }
+      const original = coverage.find((c) => c.id === id);
+      if (!original) return;
+      const updated: CoverageRequest = {
+        ...original,
+        coverageStatus: "Ongoing" as const,
+        coveredById: profile.employeeId,
+        takenBy: profile.fullName,
+        coveredHours: original.forCoverageHours,
+      };
+      setCoverage((prev) =>
+        prev.map((c) => (c.id !== id || c.requesterId === profile.employeeId ? c : updated)),
+      );
+      // Add to local coveredby state
+      setCoveredby((prev) => {
+        if (prev.some((c) => c.id === id)) return prev;
+        return [updated, ...prev];
+      });
       void safeWrite("Coverage update", () => repo.updateCoverage(id, {
           coverageStatus: "Ongoing",
           coveredById: profile.employeeId,
           takenBy: profile.fullName,
         }), { critical: true, retries: 2, toast });
+      // Create companion Coveredby record in Firebase
+      void safeWrite("Coveredby create", () => repo.createCoveredby(updated), { critical: true, retries: 2, toast });
       toast("Coverage taken over. Status set to Ongoing.", "success");
     },
-    [profile, toast, repo],
+    [profile, toast, repo, coverage, coveredby],
   );
 
   const cancelCoverage = useCallback(
@@ -1058,6 +1087,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             : c,
         ),
       );
+      // Remove from local coveredby state
+      setCoveredby((prev) => prev.filter((c) => c.id !== id));
       void safeWrite("Coverage update", () => repo.updateCoverage(id, {
           coverageStatus: "Available",
           coveredById: undefined,
@@ -1152,6 +1183,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       leaves,
       ot,
       coverage,
+      coveredby,
       infractions,
       holidays,
       notifications,
@@ -1177,7 +1209,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }),
     [
       session, signIn, signInWithEmployeeId, signOut, dark, themeMode, setThemeMode, toggleDark, navBlur, setNavBlur, reduceMotion, setReduceMotion, screen, navigate, back, stack.length,
-      profile, attendance, leaves, ot, coverage, infractions, holidays, notifications,
+      profile, attendance, leaves, ot, coverage, coveredby, infractions, holidays, notifications,
       clockIn, clockOut, clockBusy, updateNote, submitLeave, cancelLeave, submitOt, cancelOt,
       submitTechCoverage, takeoverCoverage, cancelCoverage, changeLeaveDate, updateProfile,
       markNotificationRead, deleteNotification, toasts, toast, refreshData, hasHydrated,

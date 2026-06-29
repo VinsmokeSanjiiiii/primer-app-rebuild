@@ -85,7 +85,9 @@ export interface Repository {
 
   // Coverage
   getCoverage(): Promise<CoverageRequest[]>;
+  getCoveredby(): Promise<CoverageRequest[]>;
   createCoverage(request: CoverageRequest): Promise<void>;
+  createCoveredby(request: CoverageRequest): Promise<void>;
   updateCoverage(id: string, patch: Partial<CoverageRequest>): Promise<void>;
   deleteCoverageByFilter(filter: {
     coverageType: string;
@@ -193,7 +195,13 @@ class LocalOfflineRepository implements Repository {
   async getCoverage() {
     return seedCoverage;
   }
+  async getCoveredby() {
+    return [] as CoverageRequest[];
+  }
   async createCoverage(_r: CoverageRequest) {
+    /* read-only offline */
+  }
+  async createCoveredby(_r: CoverageRequest) {
     /* read-only offline */
   }
   async updateCoverage(_id: string, _patch: Partial<CoverageRequest>) {
@@ -767,9 +775,22 @@ export class FirebaseRepository implements Repository {
       .sort((a, b) => b.createdAt - a.createdAt);
   }
 
+  async getCoveredby() {
+    const snap = await get(ref(this.db, "Coveredby"));
+    const raw = toObject<Record<string, FbCoverageRecord>>(snap) ?? {};
+    return Object.entries(raw)
+      .map(([id, rec]) => mapCoverage(id, rec))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
   async createCoverage(request: CoverageRequest) {
     const fb = mapCoverageToFb(request);
     await set(ref(this.db, `CoverageList/${request.id}`), fb);
+  }
+
+  async createCoveredby(request: CoverageRequest) {
+    const fb = mapCoverageToFb(request);
+    await set(ref(this.db, `Coveredby/${request.id}`), fb);
   }
 
   async updateCoverage(id: string, patch: Partial<CoverageRequest>) {
