@@ -44,6 +44,16 @@ import {
 } from "./lib/clockSync";
 import { safeWrite } from "./lib/repoSafe";
 import { cancelShiftReminders } from "./lib/reminders";
+import {
+  enqueueWrite,
+  processWriteQueue,
+  clearWriteQueue,
+  type QueuedOpExecutor,
+} from "./lib/writeQueue";
+import { initConnectivity } from "./lib/connectivity";
+import { auditSuccess, auditFailure } from "./lib/auditLog";
+import { reportError, newCorrelationId } from "./lib/telemetry";
+import { getDb } from "./data/firebase";
 
 // ---------------------------------------------------------------------------
 // Keys for local persistence (DataStore analogue)
@@ -538,6 +548,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // Per-user backups stay until a successful sync; on explicit sign-out,
     // purge them — the user is deliberately ending their session.
     purgeAllActiveSessions();
+    // Clear any queued writes — session is ending, writes can't be replayed.
+    clearWriteQueue();
     void cancelShiftReminders();
     setScreen("dashboard");
     setStack([]);
@@ -683,6 +695,95 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [profile?.employeeId, repo]);
 
+  // ---- connectivity manager init (Feature 3) ----
+  // Initialize once; safe to call multiple times (singleton guard inside).
+  useEffect(() => {
+    initConnectivity(getDb());
+  }, []);
+
+  // ---- durable write queue executor (Feature 1) ----
+  // Maps opType strings back to repository calls for queue replay.
+  const queueExecutor = useCallback<QueuedOpExecutor>(
+    async (opType, payload) => {
+      try {
+        switch (opType) {
+          case "createLeave":
+            await repo.createLeave(payload as LeaveRequest);
+            return { ok: true };
+          case "updateLeave": {
+            const { id, patch } = payload as { id: string; patch: Partial<LeaveRequest> };
+            await repo.updateLeave(id, patch);
+            return { ok: true };
+          }
+          case "createOtRequest":
+            await repo.createOtRequest(payload as OtRequest);
+            return { ok: true };
+          case "updateOtRequest": {
+            const { id, patch } = payload as { id: string; patch: Partial<OtRequest> };
+            await repo.updateOtRequest(id, patch);
+            return { ok: true };
+          }
+          case "createCoverage":
+            await repo.createCoverage(payload as CoverageRequest);
+            return { ok: true };
+          case "createCoveredby":
+            await repo.createCoveredby(payload as CoverageRequest);
+            return { ok: true };
+          case "updateCoverage": {
+            const { id, patch } = payload as { id: string; patch: Partial<CoverageRequest> };
+            await repo.updateCoverage(id, patch);
+            return { ok: true };
+          }
+          case "updateCoveredby": {
+            const { id, patch } = payload as { id: string; patch: Partial<CoverageRequest> };
+            await repo.updateCoveredby(id, patch);
+            return { ok: true };
+          }
+          case "deleteCoveredby":
+            await repo.deleteCoveredby(payload as string);
+            return { ok: true };
+          case "updateProfile": {
+            const { id, patch } = payload as { id: string; patch: Partial<Profile> };
+            await repo.updateProfile(id, patch);
+            return { ok: true };
+          }
+          default:
+            return { ok: false, error: new Error(`Unknown opType: ${opType}`) };
+        }
+      } catch (err) {
+        return { ok: false, error: err };
+      }
+    },
+    [repo],
+  );
+
+  // ---- write queue processor: replay pending writes when online (Feature 1) ----
+  useEffect(() => {
+    const empId = session?.employeeId;
+    const handleOnline = () => {
+      void processWriteQueue(queueExecutor, (failed) => {
+        toast(
+          `A pending action (${failed.opType.replace(/([A-Z])/g, " $1").toLowerCase()}) could not be synced after ${failed.maxRetries} attempts. Please check your records.`,
+          "error",
+        );
+        reportError(
+          "Write queue permanent failure",
+          "offline_queue_failure",
+          new Error(failed.lastError ?? "unknown"),
+          {
+            employeeId: empId,
+            correlationId: newCorrelationId(),
+            context: { opType: failed.opType, dedupKey: failed.dedupKey },
+          },
+        );
+      });
+    };
+    window.addEventListener("online", handleOnline);
+    // Also process on mount (in case there are pending entries from a previous session).
+    void handleOnline();
+    return () => window.removeEventListener("online", handleOnline);
+  }, [queueExecutor, toast, session?.employeeId]);
+
 
   // ---- mutations ----
   // `clockBusy` blocks the Clock button while a write is in-flight; this
@@ -710,6 +811,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
 
     setClockBusy(true);
+
+    // Atomic guard: prevent concurrent clock-in from another device (Feature 2).
+    // If this transaction aborts (alreadyIn: true), either a second device is
+    // genuinely clocked in, OR the isClockedIn flag is stale (e.g., a prior
+    // clock-out's profile sync failed). We cross-check against actual open
+    // Attendance records before blocking to avoid the stale-flag deadlock.
+    const atomicClock = await repo.atomicClockIn(empId);
+    if (!atomicClock.ok && !atomicClock.networkError && atomicClock.alreadyIn) {
+      let hasActualOpenSession = false;
+      try {
+        const freshAtt = await repo.getAttendance(empId);
+        hasActualOpenSession = freshAtt.some((r) => r.isClockedIn && r.employeeId === empId);
+      } catch {
+        // Can't verify from Firebase — be conservative; use the local state.
+        hasActualOpenSession = attendance.some((r) => r.isClockedIn && r.employeeId === empId);
+      }
+      if (hasActualOpenSession) {
+        setClockBusy(false);
+        auditFailure(empId, "clock_in", "Attendance", "Atomic guard: open session confirmed on another device");
+        toast("You're already clocked in on another device.", "info");
+        return;
+      }
+      // Stale flag detected (isClockedIn=true but no open Attendance record).
+      // Proceed with clock-in; the profile sync write will reset the flag correctly.
+    }
+
     try {
       const now = serverNow();
       const nowMs = now.getTime();
@@ -778,6 +905,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // Clear pendingOp but keep the backup until clock-out — guarantees
         // an offline reopen still sees the active session card.
         saveActiveSession(markPending(rec, null));
+        auditSuccess(empId, "clock_in", "Attendance", {
+          targetId: rec.id,
+          after: { dateIn: rec.dateIn, timeIn: rec.timeIn, minsLate: rec.minsLate },
+        });
         toast("Clocked in successfully.", "success");
       }
       // On failure, persistAttendanceWithRetry already toasted and left the
@@ -858,6 +989,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (ok) {
         // Finalized — backup no longer needed.
         clearActiveSessionLS(empId);
+        auditSuccess(empId, "clock_out", "Attendance", {
+          targetId: updated.id,
+          after: { dateOut, timeOut, totalHours: updated.totalHours },
+        });
         toast("Clocked out. Total hours saved.", "success");
       }
       // On failure: backup remains with pendingOp:"update"; reconciliation
@@ -909,10 +1044,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const result = await safeWrite("Leave request", () => repo.createLeave(full), { critical: true, retries: 2, toast });
 
         if (!result.ok) {
-          // Write failed — roll back the optimistic leave entry
-          setLeaves((prev) => prev.filter((l) => l.id !== full.id));
+          if (result.kind === "network") {
+            // Network failure — keep the optimistic entry and queue for later sync (Feature 1).
+            enqueueWrite({
+              dedupKey: `createLeave_${full.requestId}`,
+              opType: "createLeave",
+              payload: full,
+              maxRetries: 5,
+            });
+          } else {
+            // Non-network failure — roll back the optimistic leave entry.
+            setLeaves((prev) => prev.filter((l) => l.id !== full.id));
+          }
           return;
         }
+        // Audit successful submission (Feature 5).
+        auditSuccess(profile?.employeeId ?? "", "leave_submitted", "LeaveRequest", {
+          targetId: full.requestId,
+          after: { leaveType: full.leaveType, status: full.status, days: full.days },
+        });
 
         // Write succeeded — now deduct credits and persist the profile
         setProfile((p) => {
@@ -990,7 +1140,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
             : l,
         );
       });
-      void safeWrite("Cancel leave", () => repo.updateLeave(id, { status: "Cancelled", cancellationReason: reason }), { critical: true, retries: 2, toast });
+      void safeWrite("Cancel leave", () => repo.updateLeave(id, { status: "Cancelled", cancellationReason: reason }), { critical: true, retries: 2, toast }).then((r) => {
+        if (!r.ok && r.kind === "network") {
+          enqueueWrite({ dedupKey: `cancelLeave_${id}`, opType: "updateLeave", payload: { id, patch: { status: "Cancelled", cancellationReason: reason } }, maxRetries: 5 });
+        } else if (r.ok) {
+          auditSuccess(profile?.employeeId ?? "", "leave_cancelled", "LeaveRequest", { targetId: id, after: { status: "Cancelled", reason } });
+        }
+      });
       if (profile) {
         void safeWrite("Coverage cleanup", () => repo.deleteCoverageByFilter({
             coverageType: "Leave",
@@ -1024,7 +1180,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
       };
       setOt((prev) => [full, ...prev]);
-      void safeWrite("OT request", () => repo.createOtRequest(full), { critical: true, retries: 2, toast });
+      void safeWrite("OT request", () => repo.createOtRequest(full), { critical: true, retries: 2, toast }).then((r) => {
+        if (!r.ok && r.kind === "network") {
+          enqueueWrite({ dedupKey: `createOt_${full.requestId}`, opType: "createOtRequest", payload: full, maxRetries: 5 });
+        } else if (r.ok) {
+          auditSuccess(profile?.employeeId ?? "", "ot_submitted", "OTRequest", { targetId: full.requestId, after: { otDate: full.otDate, status: full.status } });
+        }
+      });
       toast("OT request submitted.", "success");
     },
     [toast, repo],
@@ -1039,7 +1201,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
             : o,
         ),
       );
-      void safeWrite("Cancel OT", () => repo.updateOtRequest(id, { status: "Cancelled", cancellationReason: reason }), { critical: true, retries: 2, toast });
+      void safeWrite("Cancel OT", () => repo.updateOtRequest(id, { status: "Cancelled", cancellationReason: reason }), { critical: true, retries: 2, toast }).then((r) => {
+        if (!r.ok && r.kind === "network") {
+          enqueueWrite({ dedupKey: `cancelOt_${id}`, opType: "updateOtRequest", payload: { id, patch: { status: "Cancelled", cancellationReason: reason } }, maxRetries: 5 });
+        }
+      });
       toast("OT request cancelled.", "success");
     },
     [toast, repo],
@@ -1055,14 +1221,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
       };
       setCoverage((prev) => [full, ...prev]);
-      void safeWrite("Coverage request", () => repo.createCoverage(full), { critical: true, retries: 2, toast });
+      void safeWrite("Coverage request", () => repo.createCoverage(full), { critical: true, retries: 2, toast }).then((r) => {
+        if (!r.ok && r.kind === "network") {
+          enqueueWrite({ dedupKey: `createCov_${full.coverageId}`, opType: "createCoverage", payload: full, maxRetries: 5 });
+        }
+      });
       toast("Tech issue coverage request submitted.", "success");
     },
     [toast, repo],
   );
 
   const takeoverCoverage = useCallback(
-    (id: string) => {
+    async (id: string) => {
       if (!profile) return;
       // Prevent duplicate: do not grab if already taken by this user in an active Ongoing coveredby record
       const alreadyTaken = coveredby.some(
@@ -1108,11 +1278,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
       };
 
+      // Atomic guard: prevent the same employee from double-grabbing via race
+      // condition (e.g. double-tap, two devices on the same account). (Feature 2)
+      // Note: multiple DIFFERENT employees CAN each grab — that is by design.
+      const claimResult = await repo.atomicClaimCoverage(id, profile.employeeId);
+      if (!claimResult.ok && claimResult.alreadyTaken && !claimResult.networkError) {
+        auditFailure(profile.employeeId, "coverage_grabbed", "Coverage", "Atomic guard: duplicate grab rejected", { targetId: id });
+        toast("You already have this coverage (concurrent request detected).", "info");
+        return;
+      }
+      // If networkError: fall through — the existing in-memory duplicate check
+      // (coveredby state list) still guards against double-submission.
+
       // Add to local coveredby list; the CoverageList record stays "Available"
       setCoveredby((prev) => [coveredbyRecord, ...prev]);
 
       // Persist the new Coveredby record to Firebase
-      void safeWrite("Coveredby create", () => repo.createCoveredby(coveredbyRecord), { critical: true, retries: 2, toast });
+      void safeWrite("Coveredby create", () => repo.createCoveredby(coveredbyRecord), { critical: true, retries: 2, toast }).then((r) => {
+        if (!r.ok && r.kind === "network") {
+          enqueueWrite({ dedupKey: `createCoveredby_${coveredbyRecord.id}`, opType: "createCoveredby", payload: coveredbyRecord, maxRetries: 5 });
+        } else if (r.ok) {
+          auditSuccess(profile.employeeId, "coverage_grabbed", "Coverage", {
+            targetId: coveredbyRecord.id,
+            after: { coverageDate: coveredbyRecord.coverageDate, originalCoverageId: id },
+          });
+        }
+      });
       toast("Coverage grabbed! Status set to Ongoing.", "success");
     },
     [profile, toast, repo, coverage, coveredby],
@@ -1122,7 +1313,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     (coveredbyId: string) => {
       // Remove the Coveredby record; the original CoverageList stays Available
       setCoveredby((prev) => prev.filter((c) => c.id !== coveredbyId));
-      void safeWrite("Coveredby delete", () => repo.deleteCoveredby(coveredbyId), { critical: true, retries: 2, toast });
+      void safeWrite("Coveredby delete", () => repo.deleteCoveredby(coveredbyId), { critical: true, retries: 2, toast }).then((r) => {
+        if (!r.ok && r.kind === "network") {
+          enqueueWrite({ dedupKey: `deleteCoveredby_${coveredbyId}`, opType: "deleteCoveredby", payload: coveredbyId, maxRetries: 5 });
+        } else if (r.ok) {
+          auditSuccess(profile?.employeeId ?? "", "coverage_cancelled", "Coverage", { targetId: coveredbyId });
+        }
+      });
       toast("Coverage cancelled.", "info");
     },
     [toast, repo],
@@ -1153,7 +1350,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           coveredHours: coveredHoursSpent,
         }),
         { critical: true, retries: 2, toast },
-      );
+      ).then((r) => {
+        if (!r.ok && r.kind === "network") {
+          enqueueWrite({ dedupKey: `finishCoveredby_${coveredbyId}`, opType: "updateCoveredby", payload: { id: coveredbyId, patch: { coverageStatus: "Completed", coveredHours: coveredHoursSpent } }, maxRetries: 5 });
+        } else if (r.ok) {
+          auditSuccess(profile?.employeeId ?? "", "coverage_finished", "Coverage", { targetId: coveredbyId, after: { coveredHours: coveredHoursSpent, coverageStatus: "Completed" } });
+        }
+      });
 
       // Update the original CoverageList record's coveredHours and forCoverageHours
       if (origId) {
@@ -1184,7 +1387,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
               coverageStatus: newStatus,
             }),
             { critical: true, retries: 2, toast },
-          );
+          ).then((r) => {
+            if (!r.ok && r.kind === "network") {
+              enqueueWrite({ dedupKey: `updateCoverage_${origId}_finish`, opType: "updateCoverage", payload: { id: origId, patch: { coveredHours: newCoveredHours, forCoverageHours: newForCoverageHours, coverageStatus: newStatus } }, maxRetries: 5 });
+            }
+          });
         }
       }
 

@@ -68,12 +68,22 @@ export async function safeWrite<T>(
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const value = await fn();
+      // Report success to connectivity manager (Feature 3).
+      try {
+        const { reportRequestOutcome } = await import("./connectivity");
+        reportRequestOutcome(true);
+      } catch { /* connectivity module is optional */ }
       return { ok: true, value };
     } catch (err) {
       lastErr = err;
       const kind = classifyError(err);
       // eslint-disable-next-line no-console
       console.warn(`[safeWrite] ${label} failed (${kind}, attempt ${attempt + 1}):`, err);
+      // Report failure to connectivity manager (Feature 3).
+      try {
+        const { reportRequestOutcome } = await import("./connectivity");
+        reportRequestOutcome(false);
+      } catch { /* connectivity module is optional */ }
       if (attempt < retries && kind === "network") {
         opts.onRetry?.(kind, attempt + 1, err);
         await new Promise((r) => setTimeout(r, backoff * Math.pow(2, attempt)));

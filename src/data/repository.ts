@@ -51,6 +51,7 @@ import {
   remove,
   serverTimestamp,
   onValue,
+  runTransaction,
 } from "firebase/database";
 
 // ---------------------------------------------------------------------------
@@ -113,6 +114,33 @@ export interface Repository {
 
   // Server time helper (legacy behavior)
   getServerTimeOffsetMs(): Promise<number>;
+
+  // Transaction-safe guards (Feature 2)
+  /**
+   * Atomically set isClockedIn=true on the user record.
+   * Returns { ok: true } if the transition succeeded (was false → true).
+   * Returns { ok: false, alreadyIn: true } if another session is open.
+   * Returns { ok: false, networkError: true } on connectivity failure —
+   * callers should fall through to the existing in-memory guard.
+   */
+  atomicClockIn(employeeId: string): Promise<{ ok: boolean; alreadyIn: boolean; networkError: boolean }>;
+
+  /**
+   * Atomically claim a per-employee grab lock on a coverage record.
+   * This prevents the SAME employee from double-submitting a coverage grab
+   * via race condition (e.g. double-tap, two devices on the same account).
+   * Multiple DIFFERENT employees can each hold their own lock — that is by
+   * design; the app allows multiple employees to grab the same coverage.
+   *
+   * Returns { ok: true } if the claim succeeded (or on network error, so the
+   * existing in-memory duplicate check can handle that path).
+   * Returns { ok: false, alreadyTaken: true } if this employee already has a lock.
+   * Returns { ok: false, networkError: true } when Firebase is unreachable.
+   */
+  atomicClaimCoverage(
+    coverageId: string,
+    grabberId: string,
+  ): Promise<{ ok: boolean; alreadyTaken: boolean; networkError: boolean }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +281,14 @@ class LocalOfflineRepository implements Repository {
 
   async getServerTimeOffsetMs() {
     return 0;
+  }
+
+  async atomicClockIn(_employeeId: string) {
+    return { ok: true, alreadyIn: false, networkError: false };
+  }
+
+  async atomicClaimCoverage(_coverageId: string, _grabberId: string) {
+    return { ok: true, alreadyTaken: false, networkError: false };
   }
 }
 
@@ -940,6 +976,74 @@ export class FirebaseRepository implements Repository {
     const employeeId = (await this.getSession())?.employeeId;
     if (!employeeId) return;
     await remove(ref(this.db, `Notifications/${employeeId}/${id}`));
+  }
+
+  // -------------------------------------------------------------------------
+  // Transaction-safe guards (Feature 2)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Atomically flip Users/{employeeId}/isClockedIn from false → true.
+   * Uses Firebase RTDB runTransaction so concurrent clock-in attempts
+   * from multiple devices/tabs are serialized — only the first wins.
+   */
+  async atomicClockIn(
+    employeeId: string,
+  ): Promise<{ ok: boolean; alreadyIn: boolean; networkError: boolean }> {
+    try {
+      const result = await runTransaction(
+        ref(this.db, `Users/${employeeId}/isClockedIn`),
+        (current) => {
+          if (current === true) return; // abort — already in
+          return true; // set to true
+        },
+      );
+      return {
+        ok: result.committed,
+        alreadyIn: !result.committed,
+        networkError: false,
+      };
+    } catch {
+      // Network failure — caller falls through to existing in-memory guard.
+      return { ok: false, alreadyIn: false, networkError: true };
+    }
+  }
+
+  /**
+   * Atomically write a per-employee grab lock on the given coverage.
+   *
+   * Design note: this lock is keyed by {coverageId}/{grabberId}, so each
+   * employee has their own lock node. Multiple DIFFERENT employees can each
+   * claim their own lock simultaneously — that is intentional; the Primer app
+   * allows multiple employees to grab the same coverage slot. This transaction
+   * only prevents the SAME employee from double-submitting (e.g., double-tap,
+   * two devices on the same account).
+   *
+   * The lock is stored at: CoverageList/{coverageId}/_grabLock/{grabberId}
+   */
+  async atomicClaimCoverage(
+    coverageId: string,
+    grabberId: string,
+  ): Promise<{ ok: boolean; alreadyTaken: boolean; networkError: boolean }> {
+    try {
+      const lockRef = ref(
+        this.db,
+        `CoverageList/${coverageId}/_grabLock/${grabberId}`,
+      );
+      const result = await runTransaction(lockRef, (current) => {
+        if (current) return; // abort — already grabbed by this employee
+        return Date.now(); // claim the lock
+      });
+      return {
+        ok: result.committed,
+        alreadyTaken: !result.committed,
+        networkError: false,
+      };
+    } catch {
+      // Network failure — return explicit signal so caller can distinguish from success.
+      // Caller falls through to the existing in-memory duplicate check.
+      return { ok: false, alreadyTaken: false, networkError: true };
+    }
   }
 
   // -------------------------------------------------------------------------

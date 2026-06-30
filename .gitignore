@@ -1,2 +1,4 @@
 node_modules/
 .env
+# OTP store — contains hashed OTPs (still sensitive; never commit)
+server/.otp-store.json
